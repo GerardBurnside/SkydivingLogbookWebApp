@@ -558,6 +558,17 @@ class SkydivingLogbook {
             this.closeYearStatisticsModal();
         });
 
+        document.getElementById('yearStatsModal')?.addEventListener('click', (e) => {
+            const btn = e.target.closest('.year-stats-loc-legend-btn');
+            if (!btn) return;
+            const modal = document.getElementById('yearStatsModal');
+            if (!modal || !modal.contains(btn)) return;
+            const yr = btn.dataset.year != null ? parseInt(btn.dataset.year, 10) : NaN;
+            const locKey = btn.dataset.locKey;
+            if (!Number.isFinite(yr) || locKey == null || locKey === '') return;
+            this.openYearLocationCanopyPieModal(yr, locKey);
+        });
+
         document.getElementById('harnessCanopyPieClose')?.addEventListener('click', () => {
             this.closeHarnessCanopyPieModal();
         });
@@ -949,11 +960,16 @@ class SkydivingLogbook {
         return this.jumps.filter(j => this._jumpCalendarYear(j) === year);
     }
 
+    /** Same bucket key as year location stats (trimmed name or "No location"). */
+    _jumpLocationStatsKey(jump) {
+        const raw = (jump.location != null ? String(jump.location) : '').trim();
+        return raw || 'No location';
+    }
+
     _aggregateJumpsByLocationForYear(jumps) {
         const map = new Map();
         for (const j of jumps) {
-            const raw = (j.location != null ? String(j.location) : '').trim();
-            const key = raw || 'No location';
+            const key = this._jumpLocationStatsKey(j);
             map.set(key, (map.get(key) || 0) + 1);
         }
         return [...map.entries()]
@@ -1024,11 +1040,11 @@ class SkydivingLogbook {
 
     /**
      * @param {{ label: string, count: number, equipmentId?: string }[]} entries
-     * @param {{ getColor?: (entry: { label: string, count: number }, index: number) => string }} [options]
+     * @param {{ getColor?: (entry: { label: string, count: number }, index: number) => string, interactiveLocationLegend?: { year: number } }} [options]
      * @returns {string} HTML (pie SVG + legend with counts)
      */
     _renderPieChartBlock(entries, options = {}) {
-        const { getColor } = options;
+        const { getColor, interactiveLocationLegend } = options;
         const filtered = (entries || []).filter(e => e.count > 0);
         const total = filtered.reduce((s, e) => s + e.count, 0);
         if (total === 0) {
@@ -1072,6 +1088,19 @@ class SkydivingLogbook {
         }
         const legendItems = filtered.map((e, i) => {
             const c = colorAt(e, i);
+            if (interactiveLocationLegend && Number.isFinite(interactiveLocationLegend.year)) {
+                const yr = interactiveLocationLegend.year;
+                const enc = encodeURIComponent(e.label);
+                const tip = `Show jumps per canopy at ${e.label} in ${yr}`;
+                const tipEsc = this.escapeHtml(tip);
+                return `<li>
+                    <button type="button" class="year-stats-loc-legend-btn" data-year="${yr}" data-loc-key="${enc}" title="${tipEsc}" aria-label="${tipEsc}">
+                        <span class="year-stats-swatch" style="background:${c}"></span>
+                        <span class="year-stats-legend-label">${this.escapeHtml(e.label)}</span>
+                        <span class="year-stats-legend-count">${e.count}</span>
+                    </button>
+                </li>`;
+            }
             return `<li>
                 <span class="year-stats-swatch" style="background:${c}"></span>
                 <span class="year-stats-legend-label">${this.escapeHtml(e.label)}</span>
@@ -1096,6 +1125,39 @@ class SkydivingLogbook {
     closeYearStatisticsModal() {
         const modal = document.getElementById('yearStatsModal');
         if (modal) modal.style.display = 'none';
+    }
+
+    /**
+     * @param {number} year Calendar year
+     * @param {string} locationKeyEncoded `encodeURIComponent` of the location stats key (legend label)
+     */
+    openYearLocationCanopyPieModal(year, locationKeyEncoded) {
+        let locationKey;
+        try {
+            locationKey = decodeURIComponent(locationKeyEncoded);
+        } catch {
+            return;
+        }
+        const yearInt = typeof year === 'number' ? year : parseInt(year, 10);
+        if (!Number.isFinite(yearInt)) return;
+        const modal = document.getElementById('harnessCanopyPieModal');
+        if (!modal) return;
+        const filtered = this._jumpsInCalendarYear(yearInt).filter(j =>
+            this._jumpLocationStatsKey(j) === locationKey
+        );
+        if (filtered.length === 0) {
+            this.showMessage('No jumps found for this location in that year.', 'error');
+            return;
+        }
+        const byCan = this._aggregateJumpsByCanopy(filtered);
+        const jumpCount = filtered.length;
+        const locationText = locationKey;
+        this._renderCanopyPieModal({
+            headingText: `Jump statistics — ${yearInt}`,
+            subText: `${locationText} · ${jumpCount} jump${jumpCount === 1 ? '' : 's'}`,
+            entries: byCan
+        });
+        modal.style.display = 'block';
     }
 
     openHarnessCanopyPieModal(harnessId) {
@@ -1235,7 +1297,7 @@ class SkydivingLogbook {
 
         const byLoc = this._aggregateJumpsByLocationForYear(jumps);
         const byCan = this._aggregateJumpsByCanopyForYear(jumps);
-        locRoot.innerHTML = this._renderPieChartBlock(byLoc);
+        locRoot.innerHTML = this._renderPieChartBlock(byLoc, { interactiveLocationLegend: { year } });
         const canopyColorMap = this._yearStatsCanopyColorMap();
         const palette = this._yearStatsPieColors();
         canRoot.innerHTML = this._renderPieChartBlock(
