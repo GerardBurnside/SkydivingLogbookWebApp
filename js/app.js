@@ -2256,10 +2256,9 @@ class SkydivingLogbook {
             const noteHtml = this.escapeHtml(jump.notes).replace(queryRegex, m => `<mark>${m}</mark>`);
 
             const encodedJumpId = encodeURIComponent(String(jump.id));
-            const encodedNote = encodeURIComponent(jump.notes);
 
             html += `
-                <div class="search-result-item" onclick="logbook.closeSearchNotesModal(); logbook.openJumpNotePopup('${encodedJumpId}', '${encodedNote}')">
+                <div class="search-result-item" onclick="logbook.closeSearchNotesModal(); logbook.openEditJumpModal('${encodedJumpId}')">
                     <div class="search-result-header">
                         <span class="search-result-jump-num">#${jump.jumpNumber}</span>
                         <span class="search-result-date">${dateStr}</span>
