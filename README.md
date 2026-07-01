@@ -4,6 +4,8 @@ A personal mobile-friendly web application for tracking skydiving jumps. Data ca
 
 This vibe-coded app was conceived for swoopers to keep track on the number of jumps on their linesets.
 
+The actual application can be accessed here: [https://gerardburnside.github.io/SwooperLogbookWebApp]
+
 ## Features
 - 📱 Mobile-responsive design
 - 🪂 Jump entry with location and equipment tracking
