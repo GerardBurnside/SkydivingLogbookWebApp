@@ -3799,6 +3799,10 @@ class SkydivingLogbook {
         
         this.saveComponentsToLocalStorage();
         this.renderEquipmentView();
+        if (type === 'canopy') {
+            this.updateEquipmentOptions();
+            this.updateLinesetHint();
+        }
         this.closeComponentModal();
         // Refresh autocomplete if a location was saved
         if (type === 'location') this.updateLocationDatalist();
@@ -4359,6 +4363,10 @@ class SkydivingLogbook {
             component.archived = !component.archived;
             this.saveComponentsToLocalStorage();
             this.renderEquipmentView();
+            if (type === 'canopies') {
+                this.updateEquipmentOptions();
+                this.updateLinesetHint();
+            }
             const typeSingular = this._singularize(type);
             this.showMessage(`${typeSingular.charAt(0).toUpperCase() + typeSingular.slice(1)} ${component.archived ? 'archived' : 'unarchived'} successfully!`, 'success');
         }
@@ -4439,6 +4447,10 @@ class SkydivingLogbook {
                 collection.splice(index, 1);
                 this.saveComponentsToLocalStorage();
                 this.renderEquipmentView();
+                if (type === 'canopies') {
+                    this.updateEquipmentOptions();
+                    this.updateLinesetHint();
+                }
                 if (type === 'locations') this.updateLocationDatalist();
                 if (navigator.onLine && window.SheetsAPI) window.SheetsAPI.syncEquipmentToSheet();
                 this.showMessage(`${typeSingular.charAt(0).toUpperCase() + typeSingular.slice(1)} deleted successfully!`, 'success');
@@ -5166,7 +5178,7 @@ class SkydivingLogbook {
                 ? 'Keep on this device (ignore sheet deletion)'
                 : 'Include in merged logbook';
             options.innerHTML = `
-                <div class="conflict-option selected">
+                <div class="conflict-option conflict-option-keep">
                     <label class="conflict-keep-toggle">
                         <input type="checkbox" data-conflict-keep ${defaultChecked ? 'checked' : ''}>
                         <span>${labelText}</span>
@@ -5174,6 +5186,13 @@ class SkydivingLogbook {
                     ${this._formatSyncConflictDetails(entity, item)}
                 </div>
             `;
+            const keepRow = options.querySelector('.conflict-option-keep');
+            const keepChk = options.querySelector('[data-conflict-keep]');
+            const syncKeepVisual = () => {
+                keepRow.classList.toggle('conflict-option-excluded', !keepChk.checked);
+            };
+            keepChk.addEventListener('change', syncKeepVisual);
+            syncKeepVisual();
             wrap.appendChild(options);
         }
 
