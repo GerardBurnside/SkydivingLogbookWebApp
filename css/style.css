@@ -1703,6 +1703,64 @@ button.jump-number.jump-number-btn:focus-visible {
     overflow-y: auto;
 }
 
+.sync-conflict-intro {
+    color: #666;
+    font-size: 13px;
+    margin: 0 0 1rem;
+}
+
+.sync-conflict-summary {
+    font-size: 0.85rem;
+    color: #555;
+    margin-bottom: 1rem;
+    padding: 0.65rem 0.75rem;
+    background: #f8f9fa;
+    border-radius: 8px;
+}
+
+.sync-conflict-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    justify-content: flex-end;
+    margin-top: 1.5rem;
+}
+
+.sync-conflict-section-title {
+    font-size: 0.8rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #666;
+    margin: 1.25rem 0 0.75rem;
+    padding-bottom: 0.35rem;
+    border-bottom: 1px solid #e9ecef;
+}
+
+.sync-conflict-section-title:first-child {
+    margin-top: 0;
+}
+
+.conflict-item-local-only .conflict-options,
+.conflict-item-sheet-only .conflict-options,
+.conflict-item-deleted .conflict-options {
+    grid-template-columns: 1fr;
+}
+
+.conflict-keep-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    cursor: pointer;
+    margin: 0;
+}
+
+.conflict-keep-toggle input {
+    width: auto;
+    margin: 0;
+}
+
 .import-choice-message {
     margin: 0 0 1rem;
 }

@@ -9,6 +9,8 @@ class SheetsAPI {
         this.initialized = false;
         this._pollTimer = null;
         this._syncInProgress = false;
+        this._syncConflictPending = false;
+        this._pendingConflict = null;
 
         this.ready = this.setupAPI();
     }
@@ -450,6 +452,444 @@ class SheetsAPI {
         }
     }
 
+    /** True when sheet and local both changed since last sync (another device wrote the sheet). */
+    _hasSyncConflict(d, localSynced, localModified) {
+        const sheetTs = (d._syncMeta && d._syncMeta.dataModified) || '';
+        const sheetDeviceId = (d._syncMeta && d._syncMeta.deviceId) || null;
+        const hasSheetData = !!(d.harnesses || d.canopies);
+        const sheetIsNewer = (sheetTs && sheetTs > localSynced) ||
+                             (hasSheetData && !localSynced && !sheetTs);
+        const hasPending = !!(localModified && localModified > localSynced);
+        const lastWriteFromThisDevice = sheetDeviceId && sheetDeviceId === this.getDeviceId();
+        return sheetIsNewer && hasPending && !lastWriteFromThisDevice;
+    }
+
+    _contentEqualJson(a, b) {
+        if (a === b) return true;
+        if (!a || !b) return false;
+        try {
+            return JSON.stringify(a) === JSON.stringify(b);
+        } catch {
+            return false;
+        }
+    }
+
+    _mergeEquipmentList(localList, sheetList) {
+        const byId = new Map((sheetList || []).filter(x => x?.id).map(x => [x.id, x]));
+        for (const item of localList || []) {
+            if (item?.id && !byId.has(item.id)) byId.set(item.id, item);
+        }
+        return Array.from(byId.values());
+    }
+
+    /**
+     * Build per-equipment conflict items (harnesses, canopies, locations, settings).
+     */
+    computeEquipmentConflictItems(localEquipment, sheetEquipment) {
+        const items = [];
+        const kinds = [
+            { key: 'harnesses', label: 'Harness', equipmentKind: 'harness' },
+            { key: 'canopies', label: 'Canopy', equipmentKind: 'canopy' },
+            { key: 'locations', label: 'Location', equipmentKind: 'location' }
+        ];
+
+        for (const { key, label, equipmentKind } of kinds) {
+            const localList = localEquipment?.[key] || [];
+            const sheetList = sheetEquipment?.[key] || [];
+            const localById = new Map(localList.filter(x => x?.id).map(x => [x.id, x]));
+            const sheetById = new Map(sheetList.filter(x => x?.id).map(x => [x.id, x]));
+            const matchedLocal = new Set();
+            const matchedSheet = new Set();
+
+            for (const [entityId, local] of localById) {
+                const sheet = sheetById.get(entityId);
+                if (!sheet) continue;
+                matchedLocal.add(entityId);
+                matchedSheet.add(entityId);
+                if (!this._contentEqualJson(local, sheet)) {
+                    items.push({
+                        id: `${equipmentKind}:${entityId}`,
+                        entityId,
+                        equipmentKind,
+                        type: 'modified',
+                        local,
+                        sheet,
+                        title: `${label} "${local.name || sheet.name || entityId}" — edited on both sides`
+                    });
+                }
+            }
+
+            for (const [entityId, local] of localById) {
+                if (matchedLocal.has(entityId)) continue;
+                items.push({
+                    id: `local:${equipmentKind}:${entityId}`,
+                    entityId,
+                    equipmentKind,
+                    type: 'local_only',
+                    local,
+                    title: `${label} "${local.name || entityId}" — only on this device`
+                });
+            }
+
+            for (const [entityId, sheet] of sheetById) {
+                if (matchedSheet.has(entityId)) continue;
+                items.push({
+                    id: `sheet:${equipmentKind}:${entityId}`,
+                    entityId,
+                    equipmentKind,
+                    type: 'sheet_only',
+                    sheet,
+                    title: `${label} "${sheet.name || entityId}" — only on sheet`
+                });
+            }
+        }
+
+        const localSettings = localEquipment?.settings || {};
+        const sheetSettings = sheetEquipment?.settings || {};
+        if (!this._contentEqualJson(localSettings, sheetSettings)) {
+            items.push({
+                id: 'settings',
+                equipmentKind: 'settings',
+                type: 'modified',
+                local: localSettings,
+                sheet: sheetSettings,
+                title: 'Settings — edited on both sides'
+            });
+        }
+
+        return items;
+    }
+
+    _buildMergedEquipmentList(localList, sheetList, items, selections) {
+        const merged = this._mergeEquipmentList(localList, sheetList);
+        const byId = new Map(merged.filter(x => x?.id).map(x => [x.id, x]));
+
+        for (const item of items) {
+            switch (item.type) {
+                case 'modified': {
+                    const choice = selections[item.id] || 'sheet';
+                    const chosen = choice === 'local' ? item.local : item.sheet;
+                    if (item.equipmentKind === 'settings') break;
+                    if (chosen?.id) byId.set(chosen.id, { ...chosen });
+                    break;
+                }
+                case 'local_only': {
+                    const keep = selections[item.id] !== false;
+                    if (!keep) byId.delete(item.entityId);
+                    else if (item.local) byId.set(item.entityId, { ...item.local });
+                    break;
+                }
+                case 'sheet_only': {
+                    const keep = selections[item.id] !== false;
+                    if (!keep) byId.delete(item.entityId);
+                    break;
+                }
+                default:
+                    break;
+            }
+        }
+
+        return Array.from(byId.values());
+    }
+
+    _buildMergedSettings(localSettings, sheetSettings, settingsItem, selections) {
+        const merged = { ...(localSettings || {}), ...(sheetSettings || {}) };
+        if (!settingsItem) return merged;
+        const choice = selections.settings || 'sheet';
+        return choice === 'local'
+            ? { ...(sheetSettings || {}), ...(localSettings || {}) }
+            : { ...(localSettings || {}), ...(sheetSettings || {}) };
+    }
+
+    buildMergedEquipmentFromSelections(conflictData, selections) {
+        const local = conflictData.localEquipment || {};
+        const sheet = conflictData.sheetEquipment || {};
+        const equipmentItems = conflictData.equipmentItems || [];
+        const settingsItem = equipmentItems.find(i => i.equipmentKind === 'settings');
+
+        return {
+            harnesses: this._buildMergedEquipmentList(
+                local.harnesses,
+                sheet.harnesses,
+                equipmentItems.filter(i => i.equipmentKind === 'harness'),
+                selections
+            ),
+            canopies: this._buildMergedEquipmentList(
+                local.canopies,
+                sheet.canopies,
+                equipmentItems.filter(i => i.equipmentKind === 'canopy'),
+                selections
+            ),
+            locations: this._buildMergedEquipmentList(
+                local.locations,
+                sheet.locations,
+                equipmentItems.filter(i => i.equipmentKind === 'location'),
+                selections
+            ),
+            settings: this._buildMergedSettings(
+                local.settings,
+                sheet.settings,
+                settingsItem,
+                selections
+            )
+        };
+    }
+
+    /**
+     * Build per-jump conflict items for the resolution UI.
+     * @returns {Array<{id:string,type:string,jumpId?:string,local?:object,sheet?:object,title:string}>}
+     */
+    computeSyncConflictItems(localJumps, sheetJumps, deletedJumpIds) {
+        const deletedSet = deletedJumpIds instanceof Set ? deletedJumpIds : new Set(deletedJumpIds);
+        const localById = new Map();
+        const sheetById = new Map();
+        for (const j of localJumps) {
+            if (j.jumpId) localById.set(j.jumpId, j);
+        }
+        for (const j of sheetJumps) {
+            if (j.jumpId) sheetById.set(j.jumpId, j);
+        }
+
+        const items = [];
+        const matchedLocalIds = new Set();
+        const matchedSheetIds = new Set();
+
+        for (const [jumpId, local] of localById) {
+            const sheet = sheetById.get(jumpId);
+            if (!sheet) continue;
+            matchedLocalIds.add(jumpId);
+            matchedSheetIds.add(jumpId);
+            if (!this._jumpContentEqual(local, sheet)) {
+                items.push({
+                    id: jumpId,
+                    jumpId,
+                    type: 'modified',
+                    local,
+                    sheet,
+                    title: `Jump #${local.jumpNumber || sheet.jumpNumber} — edited on both sides`
+                });
+            }
+        }
+
+        for (const [jumpId, local] of localById) {
+            if (matchedLocalIds.has(jumpId)) continue;
+            const contentMatch = sheetJumps.find(s =>
+                s.jumpId && !matchedSheetIds.has(s.jumpId) && this._jumpContentEqual(local, s)
+            );
+            if (contentMatch) {
+                matchedLocalIds.add(jumpId);
+                matchedSheetIds.add(contentMatch.jumpId);
+                continue;
+            }
+            if (deletedSet.has(jumpId)) {
+                items.push({
+                    id: `deleted:${jumpId}`,
+                    jumpId,
+                    type: 'deleted_on_sheet',
+                    local,
+                    title: `Jump #${local.jumpNumber} — deleted on sheet`
+                });
+            } else {
+                items.push({
+                    id: `local:${jumpId}`,
+                    jumpId,
+                    type: 'local_only',
+                    local,
+                    title: `Jump #${local.jumpNumber} — only on this device`
+                });
+            }
+        }
+
+        for (const j of sheetJumps) {
+            const jumpId = j.jumpId;
+            if (!jumpId || matchedSheetIds.has(jumpId) || deletedSet.has(jumpId)) continue;
+            const contentMatch = localJumps.find(l =>
+                l.jumpId && !matchedLocalIds.has(l.jumpId) && this._jumpContentEqual(l, j)
+            );
+            if (contentMatch) {
+                matchedSheetIds.add(jumpId);
+                continue;
+            }
+            items.push({
+                id: `sheet:${jumpId}`,
+                jumpId,
+                type: 'sheet_only',
+                sheet: j,
+                title: `Jump #${j.jumpNumber} — only on sheet`
+            });
+        }
+
+        return items;
+    }
+
+    /**
+     * Apply user selections on top of the default merge (sheet wins on same-id edits).
+     */
+    buildMergedJumpsFromSelections(conflictData, selections) {
+        const { localJumps, sheetJumps, deletedJumpIds } = conflictData;
+        const items = conflictData.jumpItems || conflictData.items || [];
+        const merged = this._mergeJumps(localJumps, sheetJumps, deletedJumpIds);
+        const byId = new Map(merged.filter(j => j.jumpId).map(j => [j.jumpId, j]));
+
+        for (const item of items) {
+            switch (item.type) {
+                case 'modified': {
+                    const choice = selections[item.jumpId] || 'sheet';
+                    const chosen = choice === 'local' ? item.local : item.sheet;
+                    if (chosen?.jumpId) byId.set(chosen.jumpId, { ...chosen });
+                    break;
+                }
+                case 'local_only': {
+                    const keep = selections[item.id] !== false;
+                    if (!keep) byId.delete(item.jumpId);
+                    else if (item.local) byId.set(item.jumpId, { ...item.local });
+                    break;
+                }
+                case 'sheet_only': {
+                    const keep = selections[item.id] !== false;
+                    if (!keep) byId.delete(item.jumpId);
+                    break;
+                }
+                case 'deleted_on_sheet': {
+                    const keep = selections[item.id] === 'keep';
+                    if (keep && item.local) byId.set(item.jumpId, { ...item.local });
+                    else byId.delete(item.jumpId);
+                    break;
+                }
+                default:
+                    break;
+            }
+        }
+
+        return Array.from(byId.values());
+    }
+
+    async _presentSyncConflict(d, sheetTs) {
+        const logbook = window.logbook;
+        const localJumps = logbook ? [...logbook.jumps] : await DB.getAllJumps();
+        const deletedJumpIds = await this.getDeletedJumpIds();
+        const sheetJumps = await this.getAllJumps();
+        const jumpItems = this.computeSyncConflictItems(localJumps, sheetJumps, deletedJumpIds);
+
+        const localEquipment = logbook
+            ? {
+                harnesses: [...(logbook.harnesses || [])],
+                canopies: JSON.parse(JSON.stringify(logbook.canopies || [])),
+                locations: [...(logbook.locations || [])],
+                settings: { ...(logbook.settings || {}) }
+            }
+            : {
+                harnesses: await DB.getAll('harnesses'),
+                canopies: await DB.getAll('canopies'),
+                locations: await DB.getAll('locations'),
+                settings: JSON.parse(localStorage.getItem('skydiving-settings') || '{}')
+            };
+        const sheetEquipment = {
+            harnesses: d.harnesses || [],
+            canopies: d.canopies || [],
+            locations: d.locations || [],
+            settings: d.settings || {}
+        };
+        const equipmentItems = this.computeEquipmentConflictItems(localEquipment, sheetEquipment);
+
+        this._syncConflictPending = true;
+        this._pendingConflict = {
+            sheetData: d,
+            sheetTs,
+            localJumps,
+            sheetJumps,
+            deletedJumpIds,
+            jumpItems,
+            items: jumpItems,
+            localEquipment,
+            sheetEquipment,
+            equipmentItems
+        };
+        this.updateSyncStatus('Conflict');
+
+        if (logbook && typeof logbook.showSyncConflictModal === 'function') {
+            logbook.showSyncConflictModal(this._pendingConflict);
+        } else {
+            console.warn('[Sync] Conflict detected but logbook UI unavailable — auto-merging');
+            await this._pullAllFromSheet(d, sheetTs);
+            this.clearSyncConflict();
+        }
+    }
+
+    clearSyncConflict() {
+        this._syncConflictPending = false;
+        this._pendingConflict = null;
+    }
+
+    async completeConflictResolution(mergedJumps, mergedEquipment = null) {
+        const conflict = this._pendingConflict;
+        if (!conflict) return;
+
+        const logbook = window.logbook;
+        const eq = mergedEquipment || conflict.localEquipment || {
+            harnesses: logbook?.harnesses || [],
+            canopies: logbook?.canopies || [],
+            locations: logbook?.locations || [],
+            settings: logbook?.settings || {}
+        };
+
+        if (eq.harnesses) {
+            await DB.replaceAll('harnesses', eq.harnesses).catch(err => console.error('[Sync] IDB harnesses write failed:', err));
+        }
+        if (eq.canopies) {
+            await DB.replaceAll('canopies', eq.canopies).catch(err => console.error('[Sync] IDB canopies write failed:', err));
+        }
+        if (eq.locations) {
+            await DB.replaceAll('locations', eq.locations).catch(err => console.error('[Sync] IDB locations write failed:', err));
+        }
+        if (eq.settings) {
+            localStorage.setItem('skydiving-settings', JSON.stringify(eq.settings));
+        }
+
+        await DB.replaceAllJumps(mergedJumps);
+
+        if (logbook) {
+            if (eq.harnesses) logbook.harnesses = eq.harnesses;
+            if (eq.canopies) logbook.canopies = eq.canopies;
+            if (eq.settings) logbook.settings = eq.settings;
+            if (eq.locations) {
+                logbook.locations = eq.locations;
+                logbook.locations.sort((a, b) => (a.sortOrder ?? Infinity) - (b.sortOrder ?? Infinity));
+            }
+            logbook.canopies.forEach(c => {
+                if (!Array.isArray(c.linesets)) c.linesets = [];
+                if (c.linesets.length === 0) {
+                    c.linesets.push({ number: 1, hybrid: false, previousJumps: 0, jumpCount: 0, archived: false });
+                }
+            });
+
+            logbook.jumps = mergedJumps;
+            logbook.ensureJumpIds();
+            logbook.forceRenumberJumpsAfterSync();
+            logbook.initializeCanopyLinesetJumpCounts();
+            logbook.updateEquipmentOptions();
+            logbook.updateLocationDatalist();
+            logbook.updateStats();
+            logbook.renderJumpsList();
+            if (logbook.currentView === 'equipment') logbook.renderEquipmentView();
+            if (logbook.currentView === 'stats') logbook.renderStats();
+            logbook.preFillFormWithLastJump();
+            logbook.saveToLocalStorage();
+        }
+
+        const newTs = new Date().toISOString();
+        await this.uploadAllJumps(mergedJumps);
+        await this.syncEquipmentToSheet(newTs);
+        localStorage.setItem('skydiving-data-synced', newTs);
+        localStorage.setItem('skydiving-data-modified', newTs);
+        localStorage.removeItem('skydiving-needs-sync');
+
+        this.clearSyncConflict();
+        this.updateSyncStatus('Synced');
+        setTimeout(() => this.updateSyncStatus('Online'), 2000);
+        console.log('[Sync] Conflict resolved and pushed, ts:', newTs);
+    }
+
     // ── Sync logic (same as before, transport-agnostic) ─────────────────
 
     async doStartupSync() {
@@ -486,15 +926,12 @@ class SheetsAPI {
             const lastWriteFromThisDevice = sheetDeviceId && sheetDeviceId === this.getDeviceId();
 
             if (sheetIsNewer && !lastWriteFromThisDevice) {
-                if (hasPending) {
-                    console.warn('[Startup] Conflict — sheet is newer but local has changes, merging...');
+                if (this._hasSyncConflict(d, localSynced, localModified)) {
+                    console.warn('[Startup] Conflict — sheet is newer and local has pending changes');
+                    await this._presentSyncConflict(d, sheetTs);
                 } else {
                     console.log('[Startup] Sheet is newer, pulling all data...');
-                }
-                await this._pullAllFromSheet(d, sheetTs);
-                if (hasPending) {
-                    const logbook = window.logbook;
-                    if (logbook) logbook.showSyncConflictModal();
+                    await this._pullAllFromSheet(d, sheetTs);
                 }
             } else if (sheetIsNewer && lastWriteFromThisDevice) {
                 console.log('[Startup] Sheet newer but last write from this device — pushing only (no pull)');
@@ -516,7 +953,9 @@ class SheetsAPI {
                 console.log('[Sync] Startup push complete, ts:', newTs);
             }
 
-            this.updateSyncStatus('Online');
+            if (!this._syncConflictPending) {
+                this.updateSyncStatus('Online');
+            }
         } catch (error) {
             // If the stored spreadsheet was deleted or is inaccessible (404),
             // clear the stale ID and try to find the real one on Drive.
@@ -561,6 +1000,10 @@ class SheetsAPI {
             this.updateSyncStatus('Unsynced');
             return;
         }
+        if (this._syncConflictPending) {
+            console.log('[Sync] Push skipped — sync conflict awaiting user resolution');
+            return;
+        }
         if (this._syncInProgress) {
             console.log('[Sync] Push skipped — another sync in progress');
             return;
@@ -575,7 +1018,16 @@ class SheetsAPI {
             const sheetDeviceId = (d._syncMeta && d._syncMeta.deviceId) || null;
             const localSynced   = localStorage.getItem('skydiving-data-synced') || '';
 
+            const localModified = localStorage.getItem('skydiving-data-modified') || '';
+
             const lastWriteFromThisDevice = sheetDeviceId && sheetDeviceId === this.getDeviceId();
+
+            if (this._hasSyncConflict(d, localSynced, localModified)) {
+                console.warn('[Sync] Conflict — sheet is newer and local has pending changes');
+                await this._presentSyncConflict(d, sheetTs);
+                this.updateSyncStatus('Conflict');
+                return;
+            }
 
             if (sheetTs && sheetTs > localSynced && !lastWriteFromThisDevice) {
                 console.warn('[Sync] Sheet is newer (other device) — pulling and merging');
@@ -648,7 +1100,7 @@ class SheetsAPI {
             });
 
             logbook.jumps = mergedJumps;
-            logbook.renumberJumps();
+            logbook.forceRenumberJumpsAfterSync();
             logbook.initializeCanopyLinesetJumpCounts();
             logbook.updateEquipmentOptions();
             logbook.updateLocationDatalist();
@@ -728,6 +1180,7 @@ class SheetsAPI {
     async doPendingPush() {
         if (!this.initialized || !navigator.onLine) return;
         if (!window.AuthManager.isSignedIn()) return; // bail silently — background poll must not show sign-in UI
+        if (this._syncConflictPending) return;
         if (this._syncInProgress) return;
         this._syncInProgress = true;
 
@@ -741,6 +1194,13 @@ class SheetsAPI {
                 const sheetTs       = (d._syncMeta && d._syncMeta.dataModified) || '';
                 const sheetDeviceId = (d._syncMeta && d._syncMeta.deviceId) || null;
                 const lastWriteFromThisDevice = sheetDeviceId && sheetDeviceId === this.getDeviceId();
+
+                if (this._hasSyncConflict(d, localSynced, localModified)) {
+                    console.warn('[Poll] Conflict — sheet is newer and local has pending changes');
+                    await this._presentSyncConflict(d, sheetTs);
+                    this.updateSyncStatus('Conflict');
+                    return;
+                }
 
                 if (sheetTs && sheetTs > localSynced && !lastWriteFromThisDevice) {
                     console.warn('[Poll] Sheet is newer (other device) — pulling and merging');
@@ -843,6 +1303,8 @@ class SheetsAPI {
                 syncElement.classList.add('success');
             } else if (status === 'Unsynced' || status === 'Not signed in') {
                 syncElement.classList.add('warning');
+            } else if (status === 'Conflict') {
+                syncElement.classList.add('warning');
             } else if (status.includes('failed') || status.includes('error')) {
                 syncElement.classList.add('error');
             }
@@ -852,6 +1314,9 @@ class SheetsAPI {
                 syncBtn.classList.add('syncing');
                 syncBtn.classList.remove('unsynced');
             } else if (status === 'Unsynced' || status === 'Not signed in') {
+                syncBtn.classList.remove('syncing');
+                syncBtn.classList.add('unsynced');
+            } else if (status === 'Conflict') {
                 syncBtn.classList.remove('syncing');
                 syncBtn.classList.add('unsynced');
             } else {

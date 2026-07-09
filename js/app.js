@@ -441,6 +441,13 @@ class SkydivingLogbook {
             this.closeImportChoiceModal();
         });
 
+        document.getElementById('syncConflictOverwriteBtn')?.addEventListener('click', () => {
+            this.applySyncConflictOverwrite();
+        });
+        document.getElementById('resolveConflictsBtn')?.addEventListener('click', () => {
+            this.applySyncConflictMerge();
+        });
+
         document.getElementById('importExternalCsvCancelBtn')?.addEventListener('click', () => {
             this._rejectExternalCsvEquipmentStep?.();
         });
@@ -531,6 +538,10 @@ class SkydivingLogbook {
             const importChoiceModal = document.getElementById('importChoiceModal');
             if (e.target === importChoiceModal) {
                 this.closeImportChoiceModal();
+            }
+            const conflictModal = document.getElementById('conflictModal');
+            if (e.target === conflictModal && window.SheetsAPI?._syncConflictPending) {
+                // Keep modal open until the user resolves the conflict.
             }
             const importExternalCsvModal = document.getElementById('importExternalCsvModal');
             if (e.target === importExternalCsvModal) {
@@ -2330,6 +2341,14 @@ class SkydivingLogbook {
         this.jumps.forEach((jump, index) => {
             jump.jumpNumber = this.settings.startingJumpNumber + index;
         });
+    }
+
+    /** After sync conflict resolution, always renumber from startingJumpNumber in date/time order. */
+    forceRenumberJumpsAfterSync() {
+        const prev = this.settings.resequenceJumpsFromStartingNumber;
+        this.settings.resequenceJumpsFromStartingNumber = true;
+        this.renumberJumps();
+        this.settings.resequenceJumpsFromStartingNumber = prev;
     }
 
     openSettingsModal() {
@@ -5047,11 +5066,252 @@ class SkydivingLogbook {
         }, 3000);
     }
 
-    showSyncConflictModal() {
-        this.showMessage(
-            'Sync conflict: local changes were merged with data from Google Sheets.',
-            'info'
-        );
+    showSyncConflictModal(conflictData) {
+        this._pendingSyncConflict = conflictData;
+        const modal = document.getElementById('conflictModal');
+        const listEl = document.getElementById('conflictList');
+        const summaryEl = document.getElementById('syncConflictSummary');
+        const introEl = document.getElementById('syncConflictIntro');
+        if (!modal || !listEl) return;
+
+        const jumpItems = conflictData.jumpItems || conflictData.items || [];
+        const equipmentItems = conflictData.equipmentItems || [];
+        const totalDiffs = jumpItems.length + equipmentItems.length;
+        const localCount = conflictData.localJumps?.length ?? 0;
+        const sheetCount = conflictData.sheetJumps?.length ?? 0;
+
+        if (summaryEl) {
+            summaryEl.textContent =
+                `${localCount} jump(s) on this device, ${sheetCount} on the sheet. `
+                + `${totalDiffs} difference(s) to review when merging `
+                + `(${jumpItems.length} jump, ${equipmentItems.length} equipment). `
+                + `Jump numbers will be renumbered from #${this.settings.startingJumpNumber} after sync.`;
+        }
+        if (introEl) {
+            introEl.textContent = totalDiffs
+                ? 'This device and Google Sheets both have changes since the last sync. Use local data to discard sheet changes, or review each jump and equipment difference below and merge.'
+                : 'This device and Google Sheets both have changes since the last sync. Use local data to overwrite the sheet, or merge to combine both logbooks.';
+        }
+
+        listEl.innerHTML = '';
+        this._appendSyncConflictSection(listEl, 'Jumps', jumpItems,
+            'No individual jump differences detected — merge will combine both jump lists using the default rules.');
+        this._appendSyncConflictSection(listEl, 'Equipment', equipmentItems,
+            'No equipment differences detected — merge will combine harnesses, canopies, locations, and settings using the default rules.');
+
+        modal.style.display = 'block';
+    }
+
+    _appendSyncConflictSection(listEl, title, items, emptyMessage) {
+        const heading = document.createElement('h3');
+        heading.className = 'sync-conflict-section-title';
+        heading.textContent = title;
+        listEl.appendChild(heading);
+
+        if (!items.length) {
+            const empty = document.createElement('p');
+            empty.className = 'sync-conflict-empty';
+            empty.style.cssText = 'color:#666;font-size:13px;margin:0 0 0.5rem;';
+            empty.textContent = emptyMessage;
+            listEl.appendChild(empty);
+            return;
+        }
+
+        for (const item of items) {
+            listEl.appendChild(this._renderSyncConflictItem(item));
+        }
+    }
+
+    closeSyncConflictModal() {
+        const modal = document.getElementById('conflictModal');
+        if (modal) modal.style.display = 'none';
+        this._pendingSyncConflict = null;
+    }
+
+    _renderSyncConflictItem(item) {
+        const wrap = document.createElement('div');
+        wrap.className = `conflict-item conflict-item-${item.type.replace(/_/g, '-')}`;
+        wrap.dataset.conflictId = item.id;
+
+        const title = document.createElement('h4');
+        title.textContent = item.title;
+        wrap.appendChild(title);
+
+        if (item.type === 'modified') {
+            const options = document.createElement('div');
+            options.className = 'conflict-options';
+            options.innerHTML = `
+                <div class="conflict-option selected" data-choice="sheet">
+                    <label>Sheet</label>
+                    ${this._formatSyncConflictDetails(item.sheet, item)}
+                </div>
+                <div class="conflict-option" data-choice="local">
+                    <label>This device</label>
+                    ${this._formatSyncConflictDetails(item.local, item)}
+                </div>
+            `;
+            options.querySelectorAll('.conflict-option').forEach(opt => {
+                opt.addEventListener('click', () => {
+                    options.querySelectorAll('.conflict-option').forEach(o => o.classList.remove('selected'));
+                    opt.classList.add('selected');
+                });
+            });
+            wrap.appendChild(options);
+        } else {
+            const options = document.createElement('div');
+            options.className = 'conflict-options';
+            const entity = item.local || item.sheet;
+            const defaultChecked = item.type !== 'deleted_on_sheet';
+            const labelText = item.type === 'deleted_on_sheet'
+                ? 'Keep on this device (ignore sheet deletion)'
+                : 'Include in merged logbook';
+            options.innerHTML = `
+                <div class="conflict-option selected">
+                    <label class="conflict-keep-toggle">
+                        <input type="checkbox" data-conflict-keep ${defaultChecked ? 'checked' : ''}>
+                        <span>${labelText}</span>
+                    </label>
+                    ${this._formatSyncConflictDetails(entity, item)}
+                </div>
+            `;
+            wrap.appendChild(options);
+        }
+
+        return wrap;
+    }
+
+    _formatSyncConflictDetails(entity, item) {
+        if (!entity) return '';
+        if (item.equipmentKind) {
+            return this._formatEquipmentConflictDetails(entity, item.equipmentKind);
+        }
+        return this._formatJumpConflictDetails(entity);
+    }
+
+    _formatEquipmentConflictDetails(entity, kind) {
+        const esc = (s) => String(s ?? '').replace(/</g, '&lt;');
+        switch (kind) {
+            case 'harness':
+                return `
+                    <div class="conflict-detail">${esc(entity.name)}</div>
+                    ${entity.notes ? `<div class="conflict-detail">${esc(entity.notes)}</div>` : ''}
+                `;
+            case 'canopy': {
+                const linesets = Array.isArray(entity.linesets) ? entity.linesets.length : 0;
+                const archived = entity.archived ? ' · archived' : '';
+                return `
+                    <div class="conflict-detail">${esc(entity.name)}${archived}</div>
+                    <div class="conflict-detail">${linesets} lineset(s)</div>
+                `;
+            }
+            case 'location':
+                return `
+                    <div class="conflict-detail">${esc(entity.name)}</div>
+                    <div class="conflict-detail">${entity.lat != null && entity.lng != null ? `${entity.lat}, ${entity.lng}` : 'No coordinates'}</div>
+                `;
+            case 'settings':
+                return `
+                    <div class="conflict-detail">Starting jump #${entity.startingJumpNumber ?? 1}</div>
+                    <div class="conflict-detail">Resequence jumps: ${entity.resequenceJumpsFromStartingNumber !== false ? 'yes' : 'no'}</div>
+                    <div class="conflict-detail">Recent jumps window: ${entity.recentJumpsDays ?? 7} day(s)</div>
+                `;
+            default:
+                return `<div class="conflict-detail">${esc(entity.name || entity.id || '')}</div>`;
+        }
+    }
+
+    _formatJumpConflictDetails(jump) {
+        if (!jump) return '';
+        const date = jump.date || '—';
+        const location = (jump.location || '—').replace(/</g, '&lt;');
+        const notes = (jump.notes || '').trim();
+        const notesHtml = notes
+            ? `<div class="conflict-detail">Note: ${notes.replace(/</g, '&lt;')}</div>`
+            : '';
+        const ts = jump.timestamp
+            ? `<div class="conflict-ts">${new Date(jump.timestamp).toLocaleString()}</div>`
+            : '';
+        return `
+            <div class="conflict-detail">#${jump.jumpNumber} · ${date}</div>
+            <div class="conflict-detail">${location}</div>
+            ${notesHtml}
+            ${ts}
+        `;
+    }
+
+    _collectSyncConflictSelections() {
+        const selections = {};
+        const listEl = document.getElementById('conflictList');
+        if (!listEl) return selections;
+
+        listEl.querySelectorAll('.conflict-item').forEach(itemEl => {
+            const id = itemEl.dataset.conflictId;
+            const modified = itemEl.querySelector('.conflict-option[data-choice].selected');
+            if (modified) {
+                selections[id] = modified.dataset.choice;
+                return;
+            }
+            const keepChk = itemEl.querySelector('[data-conflict-keep]');
+            if (keepChk) {
+                if (id.startsWith('deleted:')) {
+                    selections[id] = keepChk.checked ? 'keep' : 'discard';
+                } else {
+                    selections[id] = keepChk.checked;
+                }
+            }
+        });
+        return selections;
+    }
+
+    async applySyncConflictMerge() {
+        const conflict = this._pendingSyncConflict || window.SheetsAPI?._pendingConflict;
+        if (!conflict || !window.SheetsAPI) return;
+
+        const btn = document.getElementById('resolveConflictsBtn');
+        if (btn) btn.disabled = true;
+
+        try {
+            const selections = this._collectSyncConflictSelections();
+            const mergedJumps = window.SheetsAPI.buildMergedJumpsFromSelections(conflict, selections);
+            const mergedEquipment = window.SheetsAPI.buildMergedEquipmentFromSelections(conflict, selections);
+            await window.SheetsAPI.completeConflictResolution(mergedJumps, mergedEquipment);
+            this.closeSyncConflictModal();
+            this.showMessage('Changes merged and synced to Google Sheets.', 'success');
+        } catch (err) {
+            console.error('[Sync] Merge resolution failed:', err);
+            this.showMessage('Failed to merge sync changes. Try again.', 'error');
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    async applySyncConflictOverwrite() {
+        const conflict = this._pendingSyncConflict || window.SheetsAPI?._pendingConflict;
+        if (!conflict || !window.SheetsAPI) return;
+
+        const btn = document.getElementById('syncConflictOverwriteBtn');
+        if (btn) btn.disabled = true;
+
+        try {
+            const localJumps = [...(conflict.localJumps || this.jumps)];
+            this.jumps = localJumps;
+            this.ensureJumpIds();
+            this.forceRenumberJumpsAfterSync();
+            const localEquipment = conflict.localEquipment || {
+                harnesses: [...this.harnesses],
+                canopies: JSON.parse(JSON.stringify(this.canopies)),
+                locations: [...this.locations],
+                settings: { ...this.settings }
+            };
+            await window.SheetsAPI.completeConflictResolution(this.jumps, localEquipment);
+            this.closeSyncConflictModal();
+            this.showMessage('Local logbook uploaded — sheet changes were overwritten.', 'success');
+        } catch (err) {
+            console.error('[Sync] Overwrite resolution failed:', err);
+            this.showMessage('Failed to upload local data. Try again.', 'error');
+        } finally {
+            if (btn) btn.disabled = false;
+        }
     }
 }
 

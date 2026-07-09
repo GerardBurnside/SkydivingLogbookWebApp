@@ -399,13 +399,15 @@
         <!-- Conflict Resolution Modal -->
         <div id="conflictModal" class="modal">
             <div class="modal-content conflict-modal-content">
-                <h2>⚠️ Sync Conflicts</h2>
-                <p style="color:#666; font-size:13px; margin-bottom:1rem;">
-                    The same jump number was edited on two devices. Tap the version you want to keep for each jump, then press <strong>Apply &amp; Sync</strong>.
+                <h2>⚠️ Sync conflict</h2>
+                <p id="syncConflictIntro" class="sync-conflict-intro">
+                    This device and Google Sheets both have changes since the last sync. Choose whether to keep your local logbook (overwriting the sheet) or merge the changes below.
                 </p>
+                <div id="syncConflictSummary" class="sync-conflict-summary"></div>
                 <div id="conflictList"></div>
-                <div style="margin-top:1.5rem; text-align:right;">
-                    <button id="resolveConflictsBtn" class="btn-primary">Apply &amp; Sync</button>
+                <div class="sync-conflict-actions">
+                    <button type="button" id="syncConflictOverwriteBtn" class="btn-secondary">Use local data (overwrite sheet)</button>
+                    <button type="button" id="resolveConflictsBtn" class="btn-primary">Merge &amp; sync</button>
                 </div>
             </div>
         </div>
