@@ -1348,7 +1348,8 @@ class SkydivingLogbook {
 
         const updateRecentTotal = (count) => {
             if (!totalEl) return;
-            if (allJumpsByMonth) {
+            const hideTotal = allJumpsByMonth || this.settings.recentJumpsGroupByMonth;
+            if (hideTotal) {
                 totalEl.textContent = '';
                 totalEl.style.display = 'none';
             } else {
