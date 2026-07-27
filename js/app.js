@@ -2449,7 +2449,7 @@ class SkydivingLogbook {
                 spreadsheetId = await window.SheetsAPI.findOrCreateSpreadsheet();
             }
             window.SheetsAPI.reinitialize(spreadsheetId);
-            this.showMessage('Connected to Google Sheets!', 'success');
+            this.showMessage('Connected to Google Sheets!', 'success', 1000);
             window.SheetsAPI.syncWithSheet().catch(err =>
                 console.error('[Sheets] Post-redirect sync failed:', err)
             );
@@ -2496,7 +2496,7 @@ class SkydivingLogbook {
                 window.SheetsAPI.reinitialize(spreadsheetId);
             }
 
-            this.showMessage('Connected to Google Sheets!', 'success');
+            this.showMessage('Connected to Google Sheets!', 'success', 1000);
             this.closeSheetsModal(); // close settings and return to main view
 
             // Trigger a sync (fire-and-forget; errors logged inside)
@@ -5062,7 +5062,7 @@ class SkydivingLogbook {
         document.getElementById('storageAccessBtn').addEventListener('click', once);
     }
 
-    showMessage(message, type = 'info') {
+    showMessage(message, type = 'info', durationMs = 3000) {
         const toast = document.createElement('div');
         toast.className = `toast toast-${type}`;
         toast.textContent = message;
@@ -5076,7 +5076,7 @@ class SkydivingLogbook {
         setTimeout(() => {
             toast.classList.remove('toast-visible');
             toast.addEventListener('transitionend', () => toast.remove(), { once: true });
-        }, 3000);
+        }, durationMs);
     }
 
     showSyncConflictModal(conflictData) {
