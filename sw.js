@@ -11,6 +11,7 @@ const urlsToCache = [
   './js/db.js',
   './js/auth.js',
   './js/external-csv-import.js',
+  './js/flysight.js',
   './js/app.js',
   './js/sheets.js',
   './manifest.json'

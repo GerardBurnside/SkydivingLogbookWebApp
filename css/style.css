@@ -2445,3 +2445,140 @@ footer.legal-footer a {
 .toast-success { background: #4CAF50; }
 .toast-error   { background: #f44336; }
 .toast-info    { background: #2196F3; }
+
+/* Flysight track analysis */
+.flysight-section h2 {
+    margin-bottom: 1rem;
+}
+
+.flysight-controls {
+    margin-bottom: 1rem;
+    padding: 0.75rem 1rem;
+    background: #f5f7ff;
+    border-radius: 8px;
+    border: 1px solid #e3e8ff;
+}
+
+.flysight-avg-label {
+    display: block;
+    margin-bottom: 0.5rem;
+    font-size: 0.9rem;
+    color: #444;
+}
+
+.flysight-avg-slider {
+    width: 100%;
+    accent-color: #2196F3;
+}
+
+.flysight-drop-zone {
+    border: 2px dashed #90caf9;
+    border-radius: 12px;
+    padding: 1.5rem 1rem;
+    text-align: center;
+    background: #f8fbff;
+    cursor: pointer;
+    transition: border-color 0.2s ease, background-color 0.2s ease;
+    margin-bottom: 1rem;
+}
+
+.flysight-drop-zone:hover,
+.flysight-drop-zone:focus {
+    outline: none;
+    border-color: #2196F3;
+    background: #eef6ff;
+}
+
+.flysight-drop-zone.is-dragover {
+    border-color: #1976D2;
+    background: #e3f2fd;
+}
+
+.flysight-drop-title {
+    font-weight: 600;
+    color: #1565C0;
+    margin-bottom: 0.25rem;
+}
+
+.flysight-drop-hint {
+    font-size: 0.85rem;
+    color: #666;
+    margin: 0;
+}
+
+.flysight-results {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.flysight-empty {
+    text-align: center;
+    color: #888;
+}
+
+.flysight-result-card {
+    border: 1px solid #e0e0e0;
+    border-radius: 10px;
+    padding: 0.9rem 1rem;
+    background: #fff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.flysight-result-card.is-error {
+    border-color: #ffcdd2;
+    background: #fff8f8;
+}
+
+.flysight-result-name {
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 0.5rem;
+    word-break: break-all;
+}
+
+.flysight-result-metrics {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem 1rem;
+}
+
+.flysight-metric-label {
+    display: block;
+    font-size: 0.75rem;
+    color: #777;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.flysight-metric-value {
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: #1976D2;
+}
+
+.flysight-result-meta {
+    margin-top: 0.5rem;
+    font-size: 0.8rem;
+    color: #888;
+}
+
+.flysight-result-error {
+    color: #c62828;
+    font-size: 0.9rem;
+}
+
+.flysight-result-remove {
+    margin-top: 0.6rem;
+    font-size: 0.8rem;
+    color: #888;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    text-decoration: underline;
+}
+
+.flysight-result-remove:hover {
+    color: #333;
+}

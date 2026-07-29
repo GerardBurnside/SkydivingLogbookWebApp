@@ -55,7 +55,7 @@ class SkydivingLogbook {
             this.settings.resequenceJumpsFromStartingNumber = true;
         }
 
-        this.currentView = 'jumps'; // 'jumps', 'equipment', 'stats'
+        this.currentView = 'jumps'; // 'jumps', 'equipment', 'stats', 'flysight'
         this.equipmentSubView = 'canopies'; // 'canopies', 'harnesses', 'locations'
         this.showArchivedStats = false;
         /** Statistics view: show archived canopies in the Canopy Totals block only. */
@@ -75,6 +75,9 @@ class SkydivingLogbook {
         this._useMergedListCache = false;
         this._monthLocationPieGroups = new Map();
         this._dayLocationPieGroups = new Map();
+        this.flysightFiles = [];
+        const savedFlysightAvg = parseInt(localStorage.getItem('flysight-avg-points'), 10);
+        this.flysightAvgPoints = Number.isFinite(savedFlysightAvg) ? Math.min(20, Math.max(1, savedFlysightAvg)) : 5;
         
         this.init();
     }
@@ -470,6 +473,12 @@ class SkydivingLogbook {
         document.getElementById('statsViewBtn').addEventListener('click', () => {
             this.showView('stats');
         });
+
+        document.getElementById('flysightViewBtn').addEventListener('click', () => {
+            this.showView('flysight');
+        });
+
+        this._bindFlysightEvents();
 
         // Equipment management
         document.getElementById('addCanopyBtn').addEventListener('click', () => {
@@ -2821,6 +2830,8 @@ class SkydivingLogbook {
             this.renderEquipmentView();
         } else if (viewName === 'stats') {
             this.renderStats();
+        } else if (viewName === 'flysight') {
+            this.renderFlysightView();
         }
     }
     
@@ -4461,6 +4472,148 @@ class SkydivingLogbook {
     
     closeComponentModal() {
         document.getElementById('componentModal').style.display = 'none';
+    }
+
+    _bindFlysightEvents() {
+        const dropZone = document.getElementById('flysightDropZone');
+        const fileInput = document.getElementById('flysightFileInput');
+        const avgSlider = document.getElementById('flysightAvgPoints');
+        const avgValue = document.getElementById('flysightAvgPointsValue');
+        if (!dropZone || !fileInput || !avgSlider) return;
+
+        avgSlider.value = String(this.flysightAvgPoints);
+        if (avgValue) avgValue.textContent = String(this.flysightAvgPoints);
+
+        const openPicker = () => fileInput.click();
+        dropZone.addEventListener('click', (e) => {
+            if (e.target === fileInput) return;
+            openPicker();
+        });
+        dropZone.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                openPicker();
+            }
+        });
+
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files?.length) {
+                this._addFlysightFiles(fileInput.files);
+                fileInput.value = '';
+            }
+        });
+
+        ['dragenter', 'dragover'].forEach(evt => {
+            dropZone.addEventListener(evt, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dropZone.classList.add('is-dragover');
+            });
+        });
+        ['dragleave', 'drop'].forEach(evt => {
+            dropZone.addEventListener(evt, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dropZone.classList.remove('is-dragover');
+            });
+        });
+        dropZone.addEventListener('drop', (e) => {
+            const files = e.dataTransfer?.files;
+            if (files?.length) this._addFlysightFiles(files);
+        });
+
+        avgSlider.addEventListener('input', () => {
+            this.flysightAvgPoints = Math.min(20, Math.max(1, parseInt(avgSlider.value, 10) || 5));
+            if (avgValue) avgValue.textContent = String(this.flysightAvgPoints);
+            localStorage.setItem('flysight-avg-points', String(this.flysightAvgPoints));
+            if (this.flysightFiles.length) this.renderFlysightView();
+        });
+    }
+
+    async _addFlysightFiles(fileList) {
+        const files = [...fileList].filter(f => /\.csv$/i.test(f.name) || f.type === 'text/csv');
+        if (!files.length) {
+            this.showMessage('Please select CSV files.', 'error');
+            return;
+        }
+
+        for (const file of files) {
+            try {
+                const text = await file.text();
+                this.flysightFiles.push({
+                    id: `flysight_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+                    name: file.name,
+                    text
+                });
+            } catch (err) {
+                console.error('[Flysight] Failed to read file:', file.name, err);
+                this.showMessage(`Could not read ${file.name}`, 'error');
+            }
+        }
+
+        if (this.currentView === 'flysight') {
+            this.renderFlysightView();
+        } else {
+            this.showView('flysight');
+        }
+    }
+
+    removeFlysightFile(id) {
+        this.flysightFiles = this.flysightFiles.filter(f => f.id !== id);
+        this.renderFlysightView();
+    }
+
+    renderFlysightView() {
+        const container = document.getElementById('flysightResults');
+        const avgSlider = document.getElementById('flysightAvgPoints');
+        const avgValue = document.getElementById('flysightAvgPointsValue');
+        if (!container) return;
+
+        if (avgSlider) avgSlider.value = String(this.flysightAvgPoints);
+        if (avgValue) avgValue.textContent = String(this.flysightAvgPoints);
+
+        if (!this.flysightFiles.length) {
+            container.innerHTML = '<p class="no-items flysight-empty">No files analyzed yet.</p>';
+            return;
+        }
+
+        if (typeof Flysight === 'undefined') {
+            container.innerHTML = '<p class="flysight-result-error">Flysight module failed to load.</p>';
+            return;
+        }
+
+        container.innerHTML = this.flysightFiles.map(file => {
+            const result = Flysight.analyzeFlysightCsv(file.text, this.flysightAvgPoints);
+            if (result.error) {
+                return `
+                    <div class="flysight-result-card is-error">
+                        <div class="flysight-result-name">${this.escapeHtml(file.name)}</div>
+                        <p class="flysight-result-error">${this.escapeHtml(result.error)}</p>
+                        <button type="button" class="flysight-result-remove" onclick="logbook.removeFlysightFile('${file.id}')">Remove</button>
+                    </div>`;
+            }
+
+            const speed = result.maxVerticalSpeedKmh.toFixed(1);
+            const altitude = Math.round(result.altitudeM);
+            const timeLabel = result.time ? this.escapeHtml(result.time) : '—';
+
+            return `
+                <div class="flysight-result-card">
+                    <div class="flysight-result-name">${this.escapeHtml(file.name)}</div>
+                    <div class="flysight-result-metrics">
+                        <div>
+                            <span class="flysight-metric-label">Max vertical speed</span>
+                            <span class="flysight-metric-value">${speed} km/h</span>
+                        </div>
+                        <div>
+                            <span class="flysight-metric-label">Altitude</span>
+                            <span class="flysight-metric-value">${altitude} m</span>
+                        </div>
+                    </div>
+                    <p class="flysight-result-meta">${result.pointCount} points · peak at ${timeLabel}</p>
+                    <button type="button" class="flysight-result-remove" onclick="logbook.removeFlysightFile('${file.id}')">Remove</button>
+                </div>`;
+        }).join('');
     }
 
     renderStats() {
