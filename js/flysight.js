@@ -80,6 +80,55 @@
         return { points };
     }
 
+    /** Typical Flysight log interval (10 Hz) when no track is loaded. */
+    const DEFAULT_SAMPLE_INTERVAL_SEC = 0.1;
+
+    /**
+     * @param {{ time: string }[]} points
+     * @returns {number}
+     */
+    function medianSampleIntervalSec(points) {
+        if (points.length < 2) return DEFAULT_SAMPLE_INTERVAL_SEC;
+
+        const deltas = [];
+        for (let i = 1; i < points.length; i++) {
+            const t0 = Date.parse(points[i - 1].time);
+            const t1 = Date.parse(points[i].time);
+            if (!Number.isFinite(t0) || !Number.isFinite(t1)) continue;
+            const dt = (t1 - t0) / 1000;
+            if (dt > 0) deltas.push(dt);
+        }
+
+        if (!deltas.length) return DEFAULT_SAMPLE_INTERVAL_SEC;
+
+        deltas.sort((a, b) => a - b);
+        const mid = Math.floor(deltas.length / 2);
+        return deltas.length % 2 ? deltas[mid] : (deltas[mid - 1] + deltas[mid]) / 2;
+    }
+
+    /**
+     * @param {number} avgPoints
+     * @param {number} sampleIntervalSec
+     * @returns {number|null}
+     */
+    function averagingWindowDurationSec(avgPoints, sampleIntervalSec) {
+        const n = Math.max(1, Math.min(20, Math.floor(avgPoints) || 1));
+        if (n <= 1 || !Number.isFinite(sampleIntervalSec) || sampleIntervalSec <= 0) return null;
+        return (n - 1) * sampleIntervalSec;
+    }
+
+    /**
+     * @param {number} sec
+     * @returns {string}
+     */
+    function formatDurationSec(sec) {
+        if (!Number.isFinite(sec) || sec <= 0) return '';
+        if (sec < 0.01) return `${sec.toFixed(3)}s`;
+        if (sec < 1) return `${sec.toFixed(2)}s`;
+        if (sec < 10) return `${sec.toFixed(1)}s`;
+        return `${Math.round(sec)}s`;
+    }
+
     /**
      * Centered moving average; window shrinks near edges.
      * @param {number[]} values
@@ -176,7 +225,11 @@
         parseFlysightCsv,
         analyzeFlysightTrack,
         analyzeFlysightCsv,
-        movingAverage
+        movingAverage,
+        medianSampleIntervalSec,
+        averagingWindowDurationSec,
+        formatDurationSec,
+        DEFAULT_SAMPLE_INTERVAL_SEC
     };
 
     if (typeof module !== 'undefined' && module.exports) {

@@ -76,7 +76,7 @@ class SkydivingLogbook {
         this._monthLocationPieGroups = new Map();
         this._dayLocationPieGroups = new Map();
         this.flysightFiles = [];
-        const savedFlysightAvg = parseInt(localStorage.getItem('flysight-avg-points'), 10);
+        const savedFlysightAvg = parseInt(localStorage.getItem('flysight-avg-points'), 3);
         this.flysightAvgPoints = Number.isFinite(savedFlysightAvg) ? Math.min(20, Math.max(1, savedFlysightAvg)) : 5;
         
         this.init();
@@ -4474,15 +4474,52 @@ class SkydivingLogbook {
         document.getElementById('componentModal').style.display = 'none';
     }
 
+    _updateFlysightAvgLabel() {
+        const avgValue = document.getElementById('flysightAvgPointsValue');
+        const avgDuration = document.getElementById('flysightAvgDuration');
+        if (!avgValue) return;
+
+        const n = this.flysightAvgPoints;
+        avgValue.textContent = String(n);
+
+        if (!avgDuration) return;
+
+        if (n <= 1) {
+            avgDuration.textContent = '';
+            return;
+        }
+
+        let intervalSec = typeof Flysight !== 'undefined'
+            ? Flysight.DEFAULT_SAMPLE_INTERVAL_SEC
+            : 0.1;
+
+        if (typeof Flysight !== 'undefined' && this.flysightFiles.length) {
+            const allPoints = [];
+            for (const file of this.flysightFiles) {
+                const parsed = Flysight.parseFlysightCsv(file.text);
+                if (parsed.points?.length) allPoints.push(...parsed.points);
+            }
+            if (allPoints.length >= 2) {
+                intervalSec = Flysight.medianSampleIntervalSec(allPoints);
+            }
+        }
+
+        const durationSec = typeof Flysight !== 'undefined'
+            ? Flysight.averagingWindowDurationSec(n, intervalSec)
+            : (n - 1) * intervalSec;
+        avgDuration.textContent = durationSec != null
+            ? ` (${typeof Flysight !== 'undefined' ? Flysight.formatDurationSec(durationSec) : `${durationSec.toFixed(2)}s`})`
+            : '';
+    }
+
     _bindFlysightEvents() {
         const dropZone = document.getElementById('flysightDropZone');
         const fileInput = document.getElementById('flysightFileInput');
         const avgSlider = document.getElementById('flysightAvgPoints');
-        const avgValue = document.getElementById('flysightAvgPointsValue');
         if (!dropZone || !fileInput || !avgSlider) return;
 
         avgSlider.value = String(this.flysightAvgPoints);
-        if (avgValue) avgValue.textContent = String(this.flysightAvgPoints);
+        this._updateFlysightAvgLabel();
 
         const openPicker = () => fileInput.click();
         dropZone.addEventListener('click', (e) => {
@@ -4524,7 +4561,7 @@ class SkydivingLogbook {
 
         avgSlider.addEventListener('input', () => {
             this.flysightAvgPoints = Math.min(20, Math.max(1, parseInt(avgSlider.value, 10) || 5));
-            if (avgValue) avgValue.textContent = String(this.flysightAvgPoints);
+            this._updateFlysightAvgLabel();
             localStorage.setItem('flysight-avg-points', String(this.flysightAvgPoints));
             if (this.flysightFiles.length) this.renderFlysightView();
         });
@@ -4566,11 +4603,10 @@ class SkydivingLogbook {
     renderFlysightView() {
         const container = document.getElementById('flysightResults');
         const avgSlider = document.getElementById('flysightAvgPoints');
-        const avgValue = document.getElementById('flysightAvgPointsValue');
         if (!container) return;
 
         if (avgSlider) avgSlider.value = String(this.flysightAvgPoints);
-        if (avgValue) avgValue.textContent = String(this.flysightAvgPoints);
+        this._updateFlysightAvgLabel();
 
         if (!this.flysightFiles.length) {
             container.innerHTML = '<p class="no-items flysight-empty">No files analyzed yet.</p>';

@@ -58,3 +58,20 @@ test('parseFlysightCsv rejects missing columns', () => {
     assert.ok(r.error);
     assert.equal(r.points.length, 0);
 });
+
+test('medianSampleIntervalSec uses median delta between timestamps', () => {
+    const { points } = F.parseFlysightCsv(SAMPLE_CSV);
+    const interval = F.medianSampleIntervalSec(points);
+    assert.ok(interval > 0.09 && interval < 0.11);
+});
+
+test('averagingWindowDurationSec spans n-1 sample intervals', () => {
+    assert.equal(F.averagingWindowDurationSec(1, 0.1), null);
+    assert.equal(F.averagingWindowDurationSec(2, 0.05), 0.05);
+    assert.equal(F.averagingWindowDurationSec(5, 0.1), 0.4);
+});
+
+test('formatDurationSec renders compact seconds suffix', () => {
+    assert.equal(F.formatDurationSec(0.05), '0.05s');
+    assert.equal(F.formatDurationSec(0.4), '0.40s');
+});
