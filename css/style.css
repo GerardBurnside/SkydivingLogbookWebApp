@@ -2475,6 +2475,38 @@ footer.legal-footer a {
     margin-top: 0.75rem;
 }
 
+.flysight-speed-toggle {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.flysight-speed-btn {
+    flex: 1;
+    padding: 0.45rem 0.75rem;
+    border: 1px solid #90caf9;
+    border-radius: 6px;
+    background: #fff;
+    color: #333;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.flysight-speed-btn:hover {
+    background: #e3f2fd;
+}
+
+.flysight-speed-btn.is-active {
+    background: #2196F3;
+    border-color: #2196F3;
+    color: #fff;
+}
+
+.flysight-speed-btn.is-active:hover {
+    background: #1976D2;
+    border-color: #1976D2;
+}
+
 .flysight-drop-zone {
     border: 2px dashed #90caf9;
     border-radius: 12px;

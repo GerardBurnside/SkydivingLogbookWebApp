@@ -168,6 +168,13 @@
                             Max height: <span id="flysightMaxHeightValue">500</span> m AGL
                         </label>
                         <input type="range" id="flysightMaxHeight" class="flysight-avg-slider" min="1" max="500" value="500" step="1">
+                        <div class="flysight-speed-mode flysight-control-spaced">
+                            <span class="flysight-avg-label">Speed metric</span>
+                            <div class="flysight-speed-toggle" role="group" aria-label="Speed metric">
+                                <button type="button" id="flysightSpeedVertical" class="flysight-speed-btn is-active" aria-pressed="true">Vertical</button>
+                                <button type="button" id="flysightSpeedTotal" class="flysight-speed-btn" aria-pressed="false">Total</button>
+                            </div>
+                        </div>
                     </div>
                     <div id="flysightDropZone" class="flysight-drop-zone" tabindex="0" role="button" aria-label="Select or drop Flysight CSV files">
                         <p class="flysight-drop-title">Drop CSV files here</p>

@@ -82,6 +82,8 @@ class SkydivingLogbook {
         this.flysightMaxHeightM = Number.isFinite(savedFlysightMaxHeight)
             ? Math.min(500, Math.max(1, savedFlysightMaxHeight))
             : 500;
+        const savedFlysightSpeedMetric = localStorage.getItem('flysight-speed-metric');
+        this.flysightSpeedMetric = savedFlysightSpeedMetric === 'total' ? 'total' : 'vertical';
         
         this.init();
     }
@@ -4521,17 +4523,39 @@ class SkydivingLogbook {
         if (maxHeightValue) maxHeightValue.textContent = String(this.flysightMaxHeightM);
     }
 
+    _updateFlysightSpeedModeButtons() {
+        const verticalBtn = document.getElementById('flysightSpeedVertical');
+        const totalBtn = document.getElementById('flysightSpeedTotal');
+        if (!verticalBtn || !totalBtn) return;
+
+        const isTotal = this.flysightSpeedMetric === 'total';
+        verticalBtn.classList.toggle('is-active', !isTotal);
+        verticalBtn.setAttribute('aria-pressed', String(!isTotal));
+        totalBtn.classList.toggle('is-active', isTotal);
+        totalBtn.setAttribute('aria-pressed', String(isTotal));
+    }
+
+    _setFlysightSpeedMetric(metric) {
+        this.flysightSpeedMetric = metric === 'total' ? 'total' : 'vertical';
+        localStorage.setItem('flysight-speed-metric', this.flysightSpeedMetric);
+        this._updateFlysightSpeedModeButtons();
+        if (this.flysightFiles.length) this.renderFlysightView();
+    }
+
     _bindFlysightEvents() {
         const dropZone = document.getElementById('flysightDropZone');
         const fileInput = document.getElementById('flysightFileInput');
         const avgSlider = document.getElementById('flysightAvgPoints');
         const maxHeightSlider = document.getElementById('flysightMaxHeight');
-        if (!dropZone || !fileInput || !avgSlider || !maxHeightSlider) return;
+        const speedVerticalBtn = document.getElementById('flysightSpeedVertical');
+        const speedTotalBtn = document.getElementById('flysightSpeedTotal');
+        if (!dropZone || !fileInput || !avgSlider || !maxHeightSlider || !speedVerticalBtn || !speedTotalBtn) return;
 
         avgSlider.value = String(this.flysightAvgPoints);
         maxHeightSlider.value = String(this.flysightMaxHeightM);
         this._updateFlysightAvgLabel();
         this._updateFlysightMaxHeightLabel();
+        this._updateFlysightSpeedModeButtons();
 
         const openPicker = () => fileInput.click();
         dropZone.addEventListener('click', (e) => {
@@ -4584,6 +4608,9 @@ class SkydivingLogbook {
             localStorage.setItem('flysight-max-height', String(this.flysightMaxHeightM));
             if (this.flysightFiles.length) this.renderFlysightView();
         });
+
+        speedVerticalBtn.addEventListener('click', () => this._setFlysightSpeedMetric('vertical'));
+        speedTotalBtn.addEventListener('click', () => this._setFlysightSpeedMetric('total'));
     }
 
     async _addFlysightFiles(fileList) {
@@ -4629,6 +4656,7 @@ class SkydivingLogbook {
         if (maxHeightSlider) maxHeightSlider.value = String(this.flysightMaxHeightM);
         this._updateFlysightAvgLabel();
         this._updateFlysightMaxHeightLabel();
+        this._updateFlysightSpeedModeButtons();
 
         if (!this.flysightFiles.length) {
             container.innerHTML = '<p class="no-items flysight-empty">No files analyzed yet.</p>';
@@ -4641,7 +4669,12 @@ class SkydivingLogbook {
         }
 
         container.innerHTML = this.flysightFiles.map(file => {
-            const result = Flysight.analyzeFlysightCsv(file.text, this.flysightAvgPoints, this.flysightMaxHeightM);
+            const result = Flysight.analyzeFlysightCsv(
+                file.text,
+                this.flysightAvgPoints,
+                this.flysightMaxHeightM,
+                this.flysightSpeedMetric
+            );
             if (result.error) {
                 return `
                     <div class="flysight-result-card is-error">
@@ -4654,13 +4687,14 @@ class SkydivingLogbook {
             const speed = result.maxVerticalSpeedKmh.toFixed(1);
             const altitude = Math.round(result.altitudeM);
             const timeLabel = result.time ? this.escapeHtml(result.time) : '—';
+            const speedLabel = result.speedMetric === 'total' ? 'Max total speed' : 'Max vertical speed';
 
             return `
                 <div class="flysight-result-card">
                     <div class="flysight-result-name">${this.escapeHtml(file.name)}</div>
                     <div class="flysight-result-metrics">
                         <div>
-                            <span class="flysight-metric-label">Max vertical speed</span>
+                            <span class="flysight-metric-label">${speedLabel}</span>
                             <span class="flysight-metric-value">${speed} km/h</span>
                         </div>
                         <div>

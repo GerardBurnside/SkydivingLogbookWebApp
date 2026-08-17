@@ -90,3 +90,18 @@ test('analyzeFlysightTrack: max height limits eligible points', () => {
     assert.equal(full.pointCount, points.length);
     assert.ok(limited.pointCount < full.pointCount);
 });
+
+test('analyzeFlysightTrack: speed metric selects vertical vs total trajectory speed', () => {
+    const { points } = F.parseFlysightCsv(SAMPLE_CSV);
+    const vertical = F.analyzeFlysightTrack(points, 1, 500, 'vertical');
+    const total = F.analyzeFlysightTrack(points, 1, 500, 'total');
+    assert.equal(vertical.speedMetric, 'vertical');
+    assert.equal(total.speedMetric, 'total');
+    assert.ok(total.maxVerticalSpeedKmh > vertical.maxVerticalSpeedKmh);
+    const maxRawTotalKmh = Math.max(...points.map(p => F.trajectorySpeedMs(p))) * 3.6;
+    assert.ok(total.maxVerticalSpeedKmh <= maxRawTotalKmh + 0.1);
+});
+
+test('trajectorySpeedMs is 3D velocity magnitude', () => {
+    assert.equal(F.trajectorySpeedMs({ velN: 3, velE: 4, velD: 0 }), 5);
+});

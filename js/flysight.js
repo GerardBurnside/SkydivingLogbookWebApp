@@ -30,7 +30,7 @@
 
     /**
      * @param {string} text
-     * @returns {{ points: { time: string, hMSL: number, velD: number }[], error?: string }}
+     * @returns {{ points: { time: string, hMSL: number, velD: number, velN?: number, velE?: number }[], error?: string }}
      */
     function parseFlysightCsv(text) {
         const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter(l => l.trim() !== '');
@@ -56,6 +56,8 @@
         const timeCol = colMap.get('time');
         const hmslCol = colMap.get('hMSL');
         const velDCol = colMap.get('velD');
+        const velNCol = colMap.has('velN') ? colMap.get('velN') : -1;
+        const velECol = colMap.has('velE') ? colMap.get('velE') : -1;
         const points = [];
 
         for (let i = headerIdx + 1; i < lines.length; i++) {
@@ -70,7 +72,16 @@
             const velD = parseFloat(cols[velDCol]);
             if (!time || !Number.isFinite(hMSL) || !Number.isFinite(velD)) continue;
 
-            points.push({ time, hMSL, velD });
+            const point = { time, hMSL, velD };
+            if (velNCol >= 0 && velECol >= 0) {
+                const velN = parseFloat(cols[velNCol]);
+                const velE = parseFloat(cols[velECol]);
+                if (Number.isFinite(velN) && Number.isFinite(velE)) {
+                    point.velN = velN;
+                    point.velE = velE;
+                }
+            }
+            points.push(point);
         }
 
         if (points.length === 0) {
@@ -155,6 +166,23 @@
     const DEFAULT_MAX_HEIGHT_M = 500;
     const MIN_MAX_HEIGHT_M = 1;
     const MAX_MAX_HEIGHT_M = 500;
+    const DEFAULT_SPEED_METRIC = 'vertical';
+
+    /**
+     * @param {{ velN?: number, velE?: number, velD: number }} point
+     * @returns {number}
+     */
+    function trajectorySpeedMs(point) {
+        return Math.hypot(point.velN, point.velE, point.velD);
+    }
+
+    /**
+     * @param {string} speedMetric
+     * @returns {'vertical' | 'total'}
+     */
+    function normalizeSpeedMetric(speedMetric) {
+        return speedMetric === 'total' ? 'total' : 'vertical';
+    }
 
     /**
      * @param {{ hMSL: number }[]} points
@@ -171,43 +199,63 @@
      * @param {{ hMSL: number, velD: number }[]} points
      * @param {number} avgPoints
      * @param {number} maxHeightM — ignore points more than this many metres above the track minimum (AGL)
+     * @param {'vertical' | 'total'} speedMetric
      * @returns {{
      *   maxVerticalSpeedKmh: number,
      *   altitudeM: number,
      *   time: string,
      *   pointCount: number,
      *   minHmsl: number,
+     *   speedMetric: 'vertical' | 'total',
      *   error?: string
      * }}
      */
-    function analyzeFlysightTrack(points, avgPoints = 1, maxHeightM = DEFAULT_MAX_HEIGHT_M) {
+    function analyzeFlysightTrack(
+        points,
+        avgPoints = 1,
+        maxHeightM = DEFAULT_MAX_HEIGHT_M,
+        speedMetric = DEFAULT_SPEED_METRIC
+    ) {
+        const metric = normalizeSpeedMetric(speedMetric);
+        const emptyResult = (overrides = {}) => ({
+            maxVerticalSpeedKmh: 0,
+            altitudeM: 0,
+            time: '',
+            pointCount: 0,
+            minHmsl: 0,
+            speedMetric: metric,
+            ...overrides
+        });
+
         if (!points.length) {
-            return {
-                maxVerticalSpeedKmh: 0,
-                altitudeM: 0,
-                time: '',
-                pointCount: 0,
-                minHmsl: 0,
-                error: 'No track points.'
-            };
+            return emptyResult({ error: 'No track points.' });
         }
 
         const minHmsl = points.reduce((min, p) => (p.hMSL < min ? p.hMSL : min), points[0].hMSL);
         const eligible = filterPointsByMaxHeight(points, maxHeightM);
         if (!eligible.length) {
-            return {
-                maxVerticalSpeedKmh: 0,
-                altitudeM: 0,
-                time: '',
-                pointCount: 0,
-                minHmsl,
-                error: 'No track points within the max height limit.'
-            };
+            return emptyResult({ minHmsl, error: 'No track points within the max height limit.' });
         }
 
+        const useTotalSpeed = metric === 'total';
+
         const windowSize = Math.max(1, Math.min(20, Math.floor(avgPoints) || 1));
-        const absVelD = eligible.map(p => Math.abs(p.velD));
-        const smoothedVel = movingAverage(absVelD, windowSize);
+        const rawSpeeds = eligible.map(p => {
+            if (useTotalSpeed) {
+                if (!Number.isFinite(p.velN) || !Number.isFinite(p.velE)) return NaN;
+                return trajectorySpeedMs(p);
+            }
+            return Math.abs(p.velD);
+        });
+
+        if (rawSpeeds.some(s => !Number.isFinite(s))) {
+            return emptyResult({
+                minHmsl,
+                error: 'Missing velN/velE columns required for total speed.'
+            });
+        }
+
+        const smoothedVel = movingAverage(rawSpeeds, windowSize);
         const smoothedAlt = movingAverage(eligible.map(p => p.hMSL), windowSize);
 
         let peakIdx = 0;
@@ -223,7 +271,8 @@
             altitudeM,
             time: eligible[peakIdx].time,
             pointCount: eligible.length,
-            minHmsl
+            minHmsl,
+            speedMetric: metric
         };
     }
 
@@ -231,9 +280,16 @@
      * @param {string} text
      * @param {number} avgPoints
      * @param {number} maxHeightM
+     * @param {'vertical' | 'total'} speedMetric
      * @returns {ReturnType<typeof analyzeFlysightTrack> & { points: typeof points }}
      */
-    function analyzeFlysightCsv(text, avgPoints = 1, maxHeightM = DEFAULT_MAX_HEIGHT_M) {
+    function analyzeFlysightCsv(
+        text,
+        avgPoints = 1,
+        maxHeightM = DEFAULT_MAX_HEIGHT_M,
+        speedMetric = DEFAULT_SPEED_METRIC
+    ) {
+        const metric = normalizeSpeedMetric(speedMetric);
         const parsed = parseFlysightCsv(text);
         if (parsed.error) {
             return {
@@ -243,10 +299,11 @@
                 time: '',
                 pointCount: 0,
                 minHmsl: 0,
+                speedMetric: metric,
                 error: parsed.error
             };
         }
-        const result = analyzeFlysightTrack(parsed.points, avgPoints, maxHeightM);
+        const result = analyzeFlysightTrack(parsed.points, avgPoints, maxHeightM, metric);
         return { ...result, points: parsed.points };
     }
 
@@ -255,6 +312,8 @@
         analyzeFlysightTrack,
         analyzeFlysightCsv,
         filterPointsByMaxHeight,
+        trajectorySpeedMs,
+        normalizeSpeedMetric,
         movingAverage,
         medianSampleIntervalSec,
         averagingWindowDurationSec,
@@ -262,7 +321,8 @@
         DEFAULT_SAMPLE_INTERVAL_SEC,
         DEFAULT_MAX_HEIGHT_M,
         MIN_MAX_HEIGHT_M,
-        MAX_MAX_HEIGHT_M
+        MAX_MAX_HEIGHT_M,
+        DEFAULT_SPEED_METRIC
     };
 
     if (typeof module !== 'undefined' && module.exports) {
