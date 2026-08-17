@@ -152,9 +152,25 @@
         return out;
     }
 
+    const DEFAULT_MAX_HEIGHT_M = 500;
+    const MIN_MAX_HEIGHT_M = 1;
+    const MAX_MAX_HEIGHT_M = 500;
+
+    /**
+     * @param {{ hMSL: number }[]} points
+     * @param {number} maxHeightM
+     * @returns {{ hMSL: number, velD: number }[]}
+     */
+    function filterPointsByMaxHeight(points, maxHeightM) {
+        const minHmsl = points.reduce((min, p) => (p.hMSL < min ? p.hMSL : min), points[0].hMSL);
+        const ceiling = Math.max(MIN_MAX_HEIGHT_M, Math.min(MAX_MAX_HEIGHT_M, maxHeightM));
+        return points.filter(p => (p.hMSL - minHmsl) <= ceiling);
+    }
+
     /**
      * @param {{ hMSL: number, velD: number }[]} points
      * @param {number} avgPoints
+     * @param {number} maxHeightM — ignore points more than this many metres above the track minimum (AGL)
      * @returns {{
      *   maxVerticalSpeedKmh: number,
      *   altitudeM: number,
@@ -164,7 +180,7 @@
      *   error?: string
      * }}
      */
-    function analyzeFlysightTrack(points, avgPoints = 1) {
+    function analyzeFlysightTrack(points, avgPoints = 1, maxHeightM = DEFAULT_MAX_HEIGHT_M) {
         if (!points.length) {
             return {
                 maxVerticalSpeedKmh: 0,
@@ -176,25 +192,37 @@
             };
         }
 
+        const minHmsl = points.reduce((min, p) => (p.hMSL < min ? p.hMSL : min), points[0].hMSL);
+        const eligible = filterPointsByMaxHeight(points, maxHeightM);
+        if (!eligible.length) {
+            return {
+                maxVerticalSpeedKmh: 0,
+                altitudeM: 0,
+                time: '',
+                pointCount: 0,
+                minHmsl,
+                error: 'No track points within the max height limit.'
+            };
+        }
+
         const windowSize = Math.max(1, Math.min(20, Math.floor(avgPoints) || 1));
-        const absVelD = points.map(p => Math.abs(p.velD));
+        const absVelD = eligible.map(p => Math.abs(p.velD));
         const smoothedVel = movingAverage(absVelD, windowSize);
-        const smoothedAlt = movingAverage(points.map(p => p.hMSL), windowSize);
+        const smoothedAlt = movingAverage(eligible.map(p => p.hMSL), windowSize);
 
         let peakIdx = 0;
         for (let i = 1; i < smoothedVel.length; i++) {
             if (smoothedVel[i] > smoothedVel[peakIdx]) peakIdx = i;
         }
 
-        const minHmsl = points.reduce((min, p) => (p.hMSL < min ? p.hMSL : min), points[0].hMSL);
         const altitudeM = Math.max(0, smoothedAlt[peakIdx] - minHmsl);
         const maxVerticalSpeedKmh = smoothedVel[peakIdx] * 3.6;
 
         return {
             maxVerticalSpeedKmh,
             altitudeM,
-            time: points[peakIdx].time,
-            pointCount: points.length,
+            time: eligible[peakIdx].time,
+            pointCount: eligible.length,
             minHmsl
         };
     }
@@ -202,9 +230,10 @@
     /**
      * @param {string} text
      * @param {number} avgPoints
+     * @param {number} maxHeightM
      * @returns {ReturnType<typeof analyzeFlysightTrack> & { points: typeof points }}
      */
-    function analyzeFlysightCsv(text, avgPoints = 1) {
+    function analyzeFlysightCsv(text, avgPoints = 1, maxHeightM = DEFAULT_MAX_HEIGHT_M) {
         const parsed = parseFlysightCsv(text);
         if (parsed.error) {
             return {
@@ -217,7 +246,7 @@
                 error: parsed.error
             };
         }
-        const result = analyzeFlysightTrack(parsed.points, avgPoints);
+        const result = analyzeFlysightTrack(parsed.points, avgPoints, maxHeightM);
         return { ...result, points: parsed.points };
     }
 
@@ -225,11 +254,15 @@
         parseFlysightCsv,
         analyzeFlysightTrack,
         analyzeFlysightCsv,
+        filterPointsByMaxHeight,
         movingAverage,
         medianSampleIntervalSec,
         averagingWindowDurationSec,
         formatDurationSec,
-        DEFAULT_SAMPLE_INTERVAL_SEC
+        DEFAULT_SAMPLE_INTERVAL_SEC,
+        DEFAULT_MAX_HEIGHT_M,
+        MIN_MAX_HEIGHT_M,
+        MAX_MAX_HEIGHT_M
     };
 
     if (typeof module !== 'undefined' && module.exports) {

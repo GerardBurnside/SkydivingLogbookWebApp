@@ -76,8 +76,12 @@ class SkydivingLogbook {
         this._monthLocationPieGroups = new Map();
         this._dayLocationPieGroups = new Map();
         this.flysightFiles = [];
-        const savedFlysightAvg = parseInt(localStorage.getItem('flysight-avg-points'), 3);
+        const savedFlysightAvg = parseInt(localStorage.getItem('flysight-avg-points'), 10);
         this.flysightAvgPoints = Number.isFinite(savedFlysightAvg) ? Math.min(20, Math.max(1, savedFlysightAvg)) : 5;
+        const savedFlysightMaxHeight = parseInt(localStorage.getItem('flysight-max-height'), 10);
+        this.flysightMaxHeightM = Number.isFinite(savedFlysightMaxHeight)
+            ? Math.min(500, Math.max(1, savedFlysightMaxHeight))
+            : 500;
         
         this.init();
     }
@@ -4512,14 +4516,22 @@ class SkydivingLogbook {
             : '';
     }
 
+    _updateFlysightMaxHeightLabel() {
+        const maxHeightValue = document.getElementById('flysightMaxHeightValue');
+        if (maxHeightValue) maxHeightValue.textContent = String(this.flysightMaxHeightM);
+    }
+
     _bindFlysightEvents() {
         const dropZone = document.getElementById('flysightDropZone');
         const fileInput = document.getElementById('flysightFileInput');
         const avgSlider = document.getElementById('flysightAvgPoints');
-        if (!dropZone || !fileInput || !avgSlider) return;
+        const maxHeightSlider = document.getElementById('flysightMaxHeight');
+        if (!dropZone || !fileInput || !avgSlider || !maxHeightSlider) return;
 
         avgSlider.value = String(this.flysightAvgPoints);
+        maxHeightSlider.value = String(this.flysightMaxHeightM);
         this._updateFlysightAvgLabel();
+        this._updateFlysightMaxHeightLabel();
 
         const openPicker = () => fileInput.click();
         dropZone.addEventListener('click', (e) => {
@@ -4565,6 +4577,13 @@ class SkydivingLogbook {
             localStorage.setItem('flysight-avg-points', String(this.flysightAvgPoints));
             if (this.flysightFiles.length) this.renderFlysightView();
         });
+
+        maxHeightSlider.addEventListener('input', () => {
+            this.flysightMaxHeightM = Math.min(500, Math.max(1, parseInt(maxHeightSlider.value, 10) || 500));
+            this._updateFlysightMaxHeightLabel();
+            localStorage.setItem('flysight-max-height', String(this.flysightMaxHeightM));
+            if (this.flysightFiles.length) this.renderFlysightView();
+        });
     }
 
     async _addFlysightFiles(fileList) {
@@ -4603,10 +4622,13 @@ class SkydivingLogbook {
     renderFlysightView() {
         const container = document.getElementById('flysightResults');
         const avgSlider = document.getElementById('flysightAvgPoints');
+        const maxHeightSlider = document.getElementById('flysightMaxHeight');
         if (!container) return;
 
         if (avgSlider) avgSlider.value = String(this.flysightAvgPoints);
+        if (maxHeightSlider) maxHeightSlider.value = String(this.flysightMaxHeightM);
         this._updateFlysightAvgLabel();
+        this._updateFlysightMaxHeightLabel();
 
         if (!this.flysightFiles.length) {
             container.innerHTML = '<p class="no-items flysight-empty">No files analyzed yet.</p>';
@@ -4619,7 +4641,7 @@ class SkydivingLogbook {
         }
 
         container.innerHTML = this.flysightFiles.map(file => {
-            const result = Flysight.analyzeFlysightCsv(file.text, this.flysightAvgPoints);
+            const result = Flysight.analyzeFlysightCsv(file.text, this.flysightAvgPoints, this.flysightMaxHeightM);
             if (result.error) {
                 return `
                     <div class="flysight-result-card is-error">

@@ -2471,6 +2471,10 @@ footer.legal-footer a {
     accent-color: #2196F3;
 }
 
+.flysight-control-spaced {
+    margin-top: 0.75rem;
+}
+
 .flysight-drop-zone {
     border: 2px dashed #90caf9;
     border-radius: 12px;

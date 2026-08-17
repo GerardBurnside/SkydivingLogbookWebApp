@@ -75,3 +75,18 @@ test('formatDurationSec renders compact seconds suffix', () => {
     assert.equal(F.formatDurationSec(0.05), '0.05s');
     assert.equal(F.formatDurationSec(0.4), '0.40s');
 });
+
+test('filterPointsByMaxHeight ignores points above AGL ceiling', () => {
+    const { points } = F.parseFlysightCsv(SAMPLE_CSV);
+    const filtered = F.filterPointsByMaxHeight(points, 10);
+    assert.ok(filtered.length < points.length);
+    assert.ok(filtered.every(p => p.hMSL <= 1420.272 + 10));
+});
+
+test('analyzeFlysightTrack: max height limits eligible points', () => {
+    const { points } = F.parseFlysightCsv(SAMPLE_CSV);
+    const full = F.analyzeFlysightTrack(points, 1, 500);
+    const limited = F.analyzeFlysightTrack(points, 1, 5);
+    assert.equal(full.pointCount, points.length);
+    assert.ok(limited.pointCount < full.pointCount);
+});
