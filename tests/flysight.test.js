@@ -102,6 +102,18 @@ test('analyzeFlysightTrack: speed metric selects vertical vs total trajectory sp
     assert.ok(total.maxVerticalSpeedKmh <= maxRawTotalKmh + 0.1);
 });
 
+test('analyzeFlysightTrack: both mode returns vertical and total peaks', () => {
+    const { points } = F.parseFlysightCsv(SAMPLE_CSV);
+    const both = F.analyzeFlysightTrack(points, 1, 500, 'both');
+    const vertical = F.analyzeFlysightTrack(points, 1, 500, 'vertical');
+    const total = F.analyzeFlysightTrack(points, 1, 500, 'total');
+    assert.equal(both.speedMetric, 'both');
+    assert.equal(both.maxVerticalSpeedKmh, vertical.maxVerticalSpeedKmh);
+    assert.equal(both.maxTotalSpeedKmh, total.maxVerticalSpeedKmh);
+    assert.equal(both.time, vertical.time);
+    assert.equal(both.totalPeakTime, total.time);
+});
+
 test('trajectorySpeedMs is 3D velocity magnitude', () => {
     assert.equal(F.trajectorySpeedMs({ velN: 3, velE: 4, velD: 0 }), 5);
 });

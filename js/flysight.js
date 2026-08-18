@@ -178,10 +178,51 @@
 
     /**
      * @param {string} speedMetric
-     * @returns {'vertical' | 'total'}
+     * @returns {'vertical' | 'total' | 'both'}
      */
     function normalizeSpeedMetric(speedMetric) {
-        return speedMetric === 'total' ? 'total' : 'vertical';
+        if (speedMetric === 'total') return 'total';
+        if (speedMetric === 'both') return 'both';
+        return 'vertical';
+    }
+
+    /**
+     * @param {{ velN?: number, velE?: number, velD: number }[]} eligible
+     * @param {'vertical' | 'total'} mode
+     * @returns {number[]}
+     */
+    function rawSpeedsForMode(eligible, mode) {
+        if (mode === 'total') {
+            return eligible.map(p => {
+                if (!Number.isFinite(p.velN) || !Number.isFinite(p.velE)) return NaN;
+                return trajectorySpeedMs(p);
+            });
+        }
+        return eligible.map(p => Math.abs(p.velD));
+    }
+
+    /**
+     * @param {{ hMSL: number, time: string }[]} eligible
+     * @param {number} minHmsl
+     * @param {number} avgPoints
+     * @param {number[]} rawSpeeds
+     * @returns {{ maxSpeedKmh: number, altitudeM: number, time: string }}
+     */
+    function peakFromRawSpeeds(eligible, minHmsl, avgPoints, rawSpeeds) {
+        const windowSize = Math.max(1, Math.min(20, Math.floor(avgPoints) || 1));
+        const smoothedVel = movingAverage(rawSpeeds, windowSize);
+        const smoothedAlt = movingAverage(eligible.map(p => p.hMSL), windowSize);
+
+        let peakIdx = 0;
+        for (let i = 1; i < smoothedVel.length; i++) {
+            if (smoothedVel[i] > smoothedVel[peakIdx]) peakIdx = i;
+        }
+
+        return {
+            maxSpeedKmh: smoothedVel[peakIdx] * 3.6,
+            altitudeM: Math.max(0, smoothedAlt[peakIdx] - minHmsl),
+            time: eligible[peakIdx].time
+        };
     }
 
     /**
@@ -199,14 +240,16 @@
      * @param {{ hMSL: number, velD: number }[]} points
      * @param {number} avgPoints
      * @param {number} maxHeightM — ignore points more than this many metres above the track minimum (AGL)
-     * @param {'vertical' | 'total'} speedMetric
+     * @param {'vertical' | 'total' | 'both'} speedMetric
      * @returns {{
      *   maxVerticalSpeedKmh: number,
+     *   maxTotalSpeedKmh?: number,
      *   altitudeM: number,
      *   time: string,
+     *   totalPeakTime?: string,
      *   pointCount: number,
      *   minHmsl: number,
-     *   speedMetric: 'vertical' | 'total',
+     *   speedMetric: 'vertical' | 'total' | 'both',
      *   error?: string
      * }}
      */
@@ -237,17 +280,33 @@
             return emptyResult({ minHmsl, error: 'No track points within the max height limit.' });
         }
 
-        const useTotalSpeed = metric === 'total';
-
-        const windowSize = Math.max(1, Math.min(20, Math.floor(avgPoints) || 1));
-        const rawSpeeds = eligible.map(p => {
-            if (useTotalSpeed) {
-                if (!Number.isFinite(p.velN) || !Number.isFinite(p.velE)) return NaN;
-                return trajectorySpeedMs(p);
+        if (metric === 'both') {
+            const verticalRaw = rawSpeedsForMode(eligible, 'vertical');
+            const totalRaw = rawSpeedsForMode(eligible, 'total');
+            if (totalRaw.some(s => !Number.isFinite(s))) {
+                return emptyResult({
+                    minHmsl,
+                    error: 'Missing velN/velE columns required for total speed.'
+                });
             }
-            return Math.abs(p.velD);
-        });
 
+            const verticalPeak = peakFromRawSpeeds(eligible, minHmsl, avgPoints, verticalRaw);
+            const totalPeak = peakFromRawSpeeds(eligible, minHmsl, avgPoints, totalRaw);
+
+            return {
+                maxVerticalSpeedKmh: verticalPeak.maxSpeedKmh,
+                maxTotalSpeedKmh: totalPeak.maxSpeedKmh,
+                altitudeM: verticalPeak.altitudeM,
+                time: verticalPeak.time,
+                totalPeakTime: totalPeak.time,
+                pointCount: eligible.length,
+                minHmsl,
+                speedMetric: 'both'
+            };
+        }
+
+        const mode = metric === 'total' ? 'total' : 'vertical';
+        const rawSpeeds = rawSpeedsForMode(eligible, mode);
         if (rawSpeeds.some(s => !Number.isFinite(s))) {
             return emptyResult({
                 minHmsl,
@@ -255,21 +314,12 @@
             });
         }
 
-        const smoothedVel = movingAverage(rawSpeeds, windowSize);
-        const smoothedAlt = movingAverage(eligible.map(p => p.hMSL), windowSize);
-
-        let peakIdx = 0;
-        for (let i = 1; i < smoothedVel.length; i++) {
-            if (smoothedVel[i] > smoothedVel[peakIdx]) peakIdx = i;
-        }
-
-        const altitudeM = Math.max(0, smoothedAlt[peakIdx] - minHmsl);
-        const maxVerticalSpeedKmh = smoothedVel[peakIdx] * 3.6;
+        const peak = peakFromRawSpeeds(eligible, minHmsl, avgPoints, rawSpeeds);
 
         return {
-            maxVerticalSpeedKmh,
-            altitudeM,
-            time: eligible[peakIdx].time,
+            maxVerticalSpeedKmh: peak.maxSpeedKmh,
+            altitudeM: peak.altitudeM,
+            time: peak.time,
             pointCount: eligible.length,
             minHmsl,
             speedMetric: metric
@@ -280,7 +330,7 @@
      * @param {string} text
      * @param {number} avgPoints
      * @param {number} maxHeightM
-     * @param {'vertical' | 'total'} speedMetric
+     * @param {'vertical' | 'total' | 'both'} speedMetric
      * @returns {ReturnType<typeof analyzeFlysightTrack> & { points: typeof points }}
      */
     function analyzeFlysightCsv(

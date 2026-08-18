@@ -83,7 +83,9 @@ class SkydivingLogbook {
             ? Math.min(500, Math.max(1, savedFlysightMaxHeight))
             : 500;
         const savedFlysightSpeedMetric = localStorage.getItem('flysight-speed-metric');
-        this.flysightSpeedMetric = savedFlysightSpeedMetric === 'total' ? 'total' : 'vertical';
+        this.flysightSpeedMetric = ['vertical', 'total', 'both'].includes(savedFlysightSpeedMetric)
+            ? savedFlysightSpeedMetric
+            : 'vertical';
         
         this.init();
     }
@@ -4526,17 +4528,20 @@ class SkydivingLogbook {
     _updateFlysightSpeedModeButtons() {
         const verticalBtn = document.getElementById('flysightSpeedVertical');
         const totalBtn = document.getElementById('flysightSpeedTotal');
-        if (!verticalBtn || !totalBtn) return;
+        const bothBtn = document.getElementById('flysightSpeedBoth');
+        if (!verticalBtn || !totalBtn || !bothBtn) return;
 
-        const isTotal = this.flysightSpeedMetric === 'total';
-        verticalBtn.classList.toggle('is-active', !isTotal);
-        verticalBtn.setAttribute('aria-pressed', String(!isTotal));
-        totalBtn.classList.toggle('is-active', isTotal);
-        totalBtn.setAttribute('aria-pressed', String(isTotal));
+        const metric = this.flysightSpeedMetric;
+        verticalBtn.classList.toggle('is-active', metric === 'vertical');
+        verticalBtn.setAttribute('aria-pressed', String(metric === 'vertical'));
+        totalBtn.classList.toggle('is-active', metric === 'total');
+        totalBtn.setAttribute('aria-pressed', String(metric === 'total'));
+        bothBtn.classList.toggle('is-active', metric === 'both');
+        bothBtn.setAttribute('aria-pressed', String(metric === 'both'));
     }
 
     _setFlysightSpeedMetric(metric) {
-        this.flysightSpeedMetric = metric === 'total' ? 'total' : 'vertical';
+        this.flysightSpeedMetric = ['vertical', 'total', 'both'].includes(metric) ? metric : 'vertical';
         localStorage.setItem('flysight-speed-metric', this.flysightSpeedMetric);
         this._updateFlysightSpeedModeButtons();
         if (this.flysightFiles.length) this.renderFlysightView();
@@ -4549,7 +4554,8 @@ class SkydivingLogbook {
         const maxHeightSlider = document.getElementById('flysightMaxHeight');
         const speedVerticalBtn = document.getElementById('flysightSpeedVertical');
         const speedTotalBtn = document.getElementById('flysightSpeedTotal');
-        if (!dropZone || !fileInput || !avgSlider || !maxHeightSlider || !speedVerticalBtn || !speedTotalBtn) return;
+        const speedBothBtn = document.getElementById('flysightSpeedBoth');
+        if (!dropZone || !fileInput || !avgSlider || !maxHeightSlider || !speedVerticalBtn || !speedTotalBtn || !speedBothBtn) return;
 
         avgSlider.value = String(this.flysightAvgPoints);
         maxHeightSlider.value = String(this.flysightMaxHeightM);
@@ -4611,6 +4617,7 @@ class SkydivingLogbook {
 
         speedVerticalBtn.addEventListener('click', () => this._setFlysightSpeedMetric('vertical'));
         speedTotalBtn.addEventListener('click', () => this._setFlysightSpeedMetric('total'));
+        speedBothBtn.addEventListener('click', () => this._setFlysightSpeedMetric('both'));
     }
 
     async _addFlysightFiles(fileList) {
@@ -4684,25 +4691,48 @@ class SkydivingLogbook {
                     </div>`;
             }
 
-            const speed = result.maxVerticalSpeedKmh.toFixed(1);
             const altitude = Math.round(result.altitudeM);
             const timeLabel = result.time ? this.escapeHtml(result.time) : '—';
-            const speedLabel = result.speedMetric === 'total' ? 'Max total speed' : 'Max vertical speed';
+
+            let speedMetricsHtml;
+            let metaHtml;
+
+            if (result.speedMetric === 'both') {
+                const verticalSpeed = result.maxVerticalSpeedKmh.toFixed(1);
+                const totalSpeed = result.maxTotalSpeedKmh.toFixed(1);
+                const totalTimeLabel = result.totalPeakTime ? this.escapeHtml(result.totalPeakTime) : '—';
+                speedMetricsHtml = `
+                        <div>
+                            <span class="flysight-metric-label">Max vertical speed</span>
+                            <span class="flysight-metric-value">${verticalSpeed} km/h</span>
+                        </div>
+                        <div>
+                            <span class="flysight-metric-label">Max total speed</span>
+                            <span class="flysight-metric-value">${totalSpeed} km/h</span>
+                        </div>`;
+                metaHtml = `${result.pointCount} points · vertical peak at ${timeLabel} · total peak at ${totalTimeLabel}`;
+            } else {
+                const speed = result.maxVerticalSpeedKmh.toFixed(1);
+                const speedLabel = result.speedMetric === 'total' ? 'Max total speed' : 'Max vertical speed';
+                speedMetricsHtml = `
+                        <div>
+                            <span class="flysight-metric-label">${speedLabel}</span>
+                            <span class="flysight-metric-value">${speed} km/h</span>
+                        </div>`;
+                metaHtml = `${result.pointCount} points · peak at ${timeLabel}`;
+            }
 
             return `
                 <div class="flysight-result-card">
                     <div class="flysight-result-name">${this.escapeHtml(file.name)}</div>
                     <div class="flysight-result-metrics">
-                        <div>
-                            <span class="flysight-metric-label">${speedLabel}</span>
-                            <span class="flysight-metric-value">${speed} km/h</span>
-                        </div>
+                        ${speedMetricsHtml}
                         <div>
                             <span class="flysight-metric-label">Altitude</span>
                             <span class="flysight-metric-value">${altitude} m</span>
                         </div>
                     </div>
-                    <p class="flysight-result-meta">${result.pointCount} points · peak at ${timeLabel}</p>
+                    <p class="flysight-result-meta">${metaHtml}</p>
                     <button type="button" class="flysight-result-remove" onclick="logbook.removeFlysightFile('${file.id}')">Remove</button>
                 </div>`;
         }).join('');
