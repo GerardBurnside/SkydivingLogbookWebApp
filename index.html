@@ -31,6 +31,7 @@
                 <button id="equipmentViewBtn" class="nav-btn">Equipment</button>
                 <button id="statsViewBtn" class="nav-btn">Statistics</button>
                 <button id="flysightViewBtn" class="nav-btn">Flysight</button>
+                <button id="todosViewBtn" class="nav-btn">TODOs</button>
             </nav>
         </header>
 
@@ -185,6 +186,20 @@
                     <div id="flysightResults" class="flysight-results">
                         <p class="no-items flysight-empty">No files analyzed yet.</p>
                     </div>
+                </section>
+            </div>
+
+            <!-- TODOs / grocery-style checklist -->
+            <div id="todosView" class="view" style="display: none;">
+                <section class="todos-section">
+                    <div class="todos-header">
+                        <h2>TODOs</h2>
+                        <button type="button" id="addTodoBtn" class="todo-add-btn" title="Add item" aria-label="Add item">+</button>
+                    </div>
+                    <form id="todoAddForm" class="todo-add-form" hidden>
+                        <input type="text" id="todoAddInput" maxlength="200" placeholder="Add an item…" autocomplete="off" enterkeyhint="done">
+                    </form>
+                    <div id="todosList" class="todos-list"></div>
                 </section>
             </div>
         </main>
@@ -557,6 +572,23 @@
                     <div id="harnessCanopyPieRoot" class="year-stats-pie-root"></div>
                 </div>
                 <p id="harnessCanopyPiePreAppNote" class="harness-canopy-pie-pre-note" hidden></p>
+            </div>
+        </div>
+
+        <!-- TODO item edit / remove (opened by long-press) -->
+        <div id="todoItemModal" class="modal">
+            <div class="modal-content todo-item-modal-content">
+                <span id="todoItemModalClose" class="close" title="Close">&times;</span>
+                <h2>Edit item</h2>
+                <form id="todoEditForm">
+                    <div class="form-group">
+                        <input type="text" id="todoEditInput" maxlength="200" required autocomplete="off" enterkeyhint="done">
+                    </div>
+                    <div class="todo-edit-actions">
+                        <button type="submit" class="btn-primary">Save</button>
+                        <button type="button" id="todoRemoveBtn" class="btn-danger">Remove</button>
+                    </div>
+                </form>
             </div>
         </div>
 

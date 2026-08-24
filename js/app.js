@@ -55,7 +55,13 @@ class SkydivingLogbook {
             this.settings.resequenceJumpsFromStartingNumber = true;
         }
 
-        this.currentView = 'jumps'; // 'jumps', 'equipment', 'stats', 'flysight'
+        this.todos = this.loadTodos();
+        this._todoLongPressTimer = null;
+        this._todoLongPressId = null;
+        this._todoSuppressClick = false;
+        this._editingTodoId = null;
+
+        this.currentView = 'jumps'; // 'jumps', 'equipment', 'stats', 'flysight', 'todos'
         this.equipmentSubView = 'canopies'; // 'canopies', 'harnesses', 'locations'
         this.showArchivedStats = false;
         /** Statistics view: show archived canopies in the Canopy Totals block only. */
@@ -486,6 +492,11 @@ class SkydivingLogbook {
             this.showView('flysight');
         });
 
+        document.getElementById('todosViewBtn').addEventListener('click', () => {
+            this.showView('todos');
+        });
+
+        this._bindTodoEvents();
         this._bindFlysightEvents();
 
         // Equipment management
@@ -579,6 +590,10 @@ class SkydivingLogbook {
             const resetDbConfirmModal = document.getElementById('resetDbConfirmModal');
             if (e.target === resetDbConfirmModal) {
                 this.closeResetDbConfirmModal();
+            }
+            const todoItemModal = document.getElementById('todoItemModal');
+            if (e.target === todoItemModal) {
+                this.closeTodoItemModal();
             }
         });
 
@@ -2814,6 +2829,260 @@ class SkydivingLogbook {
         }
     }
 
+    loadTodos() {
+        try {
+            const parsed = JSON.parse(localStorage.getItem('skydiving-todos') || '[]');
+            if (!Array.isArray(parsed)) return [];
+            return parsed
+                .filter(t => t && typeof t.text === 'string')
+                .map(t => ({
+                    id: String(t.id || this._newTodoId()),
+                    text: t.text,
+                    done: Boolean(t.done),
+                    createdAt: Number(t.createdAt) || Date.now(),
+                    doneAt: t.done ? (Number(t.doneAt) || Date.now()) : null
+                }));
+        } catch (_) {
+            return [];
+        }
+    }
+
+    saveTodos() {
+        localStorage.setItem('skydiving-todos', JSON.stringify(this.todos));
+    }
+
+    _newTodoId() {
+        return 'todo-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+    }
+
+    _todoCheckIconSvg() {
+        return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>';
+    }
+
+    _bindTodoEvents() {
+        document.getElementById('addTodoBtn')?.addEventListener('click', () => {
+            this.showTodoAddForm();
+        });
+
+        document.getElementById('todoAddForm')?.addEventListener('submit', (e) => {
+            e.preventDefault();
+            this.addTodoFromInput();
+        });
+
+        document.getElementById('todoEditForm')?.addEventListener('submit', (e) => {
+            e.preventDefault();
+            this.saveTodoEdit();
+        });
+
+        document.getElementById('todoRemoveBtn')?.addEventListener('click', () => {
+            this.removeEditingTodo();
+        });
+
+        document.getElementById('todoItemModalClose')?.addEventListener('click', () => {
+            this.closeTodoItemModal();
+        });
+
+        const list = document.getElementById('todosList');
+        if (!list) return;
+
+        list.addEventListener('click', (e) => {
+            if (this._todoSuppressClick) {
+                e.preventDefault();
+                e.stopPropagation();
+                this._todoSuppressClick = false;
+                return;
+            }
+            const clearBtn = e.target.closest('#clearDoneTodosBtn');
+            if (clearBtn) {
+                this.clearDoneTodos();
+                return;
+            }
+            const checkBtn = e.target.closest('.todo-check-btn');
+            if (checkBtn) {
+                this.toggleTodoDone(checkBtn.dataset.todoId);
+            }
+        });
+
+        list.addEventListener('pointerdown', (e) => {
+            if (e.pointerType === 'mouse' && e.button !== 0) return;
+            if (e.target.closest('.todo-check-btn') || e.target.closest('#clearDoneTodosBtn')) return;
+            const item = e.target.closest('.todo-item');
+            if (!item) return;
+            const id = item.dataset.todoId;
+            this._cancelTodoLongPress();
+            this._todoLongPressId = id;
+            this._todoPointerStartX = e.clientX;
+            this._todoPointerStartY = e.clientY;
+            this._todoLongPressTimer = setTimeout(() => {
+                this._todoLongPressTimer = null;
+                this._todoSuppressClick = true;
+                if (typeof navigator.vibrate === 'function') navigator.vibrate(12);
+                this.openTodoItemModal(id);
+            }, 500);
+        });
+
+        list.addEventListener('pointermove', (e) => {
+            if (!this._todoLongPressTimer) return;
+            const dx = e.clientX - this._todoPointerStartX;
+            const dy = e.clientY - this._todoPointerStartY;
+            if (Math.hypot(dx, dy) > 10) this._cancelTodoLongPress();
+        });
+
+        list.addEventListener('pointerup', () => this._cancelTodoLongPress());
+        list.addEventListener('pointercancel', () => this._cancelTodoLongPress());
+
+        list.addEventListener('contextmenu', (e) => {
+            const item = e.target.closest('.todo-item');
+            if (!item || e.target.closest('.todo-check-btn')) return;
+            e.preventDefault();
+            this._cancelTodoLongPress();
+            this.openTodoItemModal(item.dataset.todoId);
+        });
+    }
+
+    _cancelTodoLongPress() {
+        if (this._todoLongPressTimer) {
+            clearTimeout(this._todoLongPressTimer);
+            this._todoLongPressTimer = null;
+        }
+        this._todoLongPressId = null;
+    }
+
+    showTodoAddForm() {
+        const form = document.getElementById('todoAddForm');
+        const input = document.getElementById('todoAddInput');
+        if (!form || !input) return;
+        form.hidden = false;
+        input.focus();
+    }
+
+    addTodoFromInput() {
+        const input = document.getElementById('todoAddInput');
+        if (!input) return;
+        const text = input.value.trim();
+        if (!text) return;
+        this.todos.push({
+            id: this._newTodoId(),
+            text,
+            done: false,
+            createdAt: Date.now(),
+            doneAt: null
+        });
+        this.saveTodos();
+        input.value = '';
+        this.renderTodosList();
+        input.focus();
+    }
+
+    renderTodosList() {
+        const list = document.getElementById('todosList');
+        if (!list) return;
+
+        const active = this.todos.filter(t => !t.done);
+        const done = this.todos.filter(t => t.done);
+
+        if (active.length === 0 && done.length === 0) {
+            list.innerHTML = '<p class="todo-empty">No items yet. Tap + to add one.</p>';
+            return;
+        }
+
+        const rows = items => items.map(item => this._todoItemHtml(item)).join('');
+        let html = rows(active);
+        if (done.length > 0) {
+            html += `
+                <div class="todo-done-separator">
+                    <span class="todo-done-separator-label">Done</span>
+                    <button type="button" id="clearDoneTodosBtn" class="todo-clear-done-btn">Remove all</button>
+                </div>
+                ${rows(done)}
+            `;
+        }
+        list.innerHTML = html;
+    }
+
+    _todoItemHtml(item) {
+        const doneClass = item.done ? ' todo-item-done' : '';
+        const label = item.done ? 'Mark as not done' : 'Mark as done';
+        const id = this.escapeHtml(item.id);
+        return `
+            <div class="todo-item${doneClass}" data-todo-id="${id}">
+                <span class="todo-item-text">${this.escapeHtml(item.text)}</span>
+                <button type="button" class="todo-check-btn" data-todo-id="${id}" title="${label}" aria-label="${label}">
+                    ${this._todoCheckIconSvg()}
+                </button>
+            </div>
+        `;
+    }
+
+    toggleTodoDone(id) {
+        const idx = this.todos.findIndex(t => t.id === id);
+        if (idx < 0) return;
+        const [item] = this.todos.splice(idx, 1);
+        if (item.done) {
+            item.done = false;
+            item.doneAt = null;
+            const firstDone = this.todos.findIndex(t => t.done);
+            if (firstDone === -1) this.todos.push(item);
+            else this.todos.splice(firstDone, 0, item);
+        } else {
+            item.done = true;
+            item.doneAt = Date.now();
+            this.todos.push(item);
+        }
+        this.saveTodos();
+        this.renderTodosList();
+    }
+
+    clearDoneTodos() {
+        if (!this.todos.some(t => t.done)) return;
+        this.todos = this.todos.filter(t => !t.done);
+        this.saveTodos();
+        this.renderTodosList();
+    }
+
+    openTodoItemModal(id) {
+        const item = this.todos.find(t => t.id === id);
+        const modal = document.getElementById('todoItemModal');
+        const input = document.getElementById('todoEditInput');
+        if (!item || !modal || !input) return;
+        this._editingTodoId = id;
+        input.value = item.text;
+        modal.style.display = 'block';
+        setTimeout(() => {
+            input.focus();
+            input.setSelectionRange(input.value.length, input.value.length);
+        }, 50);
+    }
+
+    closeTodoItemModal() {
+        const modal = document.getElementById('todoItemModal');
+        if (modal) modal.style.display = 'none';
+        this._editingTodoId = null;
+    }
+
+    saveTodoEdit() {
+        const id = this._editingTodoId;
+        const input = document.getElementById('todoEditInput');
+        if (!id || !input) return;
+        const text = input.value.trim();
+        if (!text) return;
+        const item = this.todos.find(t => t.id === id);
+        if (!item) return;
+        item.text = text;
+        this.saveTodos();
+        this.closeTodoItemModal();
+        this.renderTodosList();
+    }
+
+    removeEditingTodo() {
+        const id = this._editingTodoId;
+        if (!id) return;
+        this.todos = this.todos.filter(t => t.id !== id);
+        this.saveTodos();
+        this.closeTodoItemModal();
+        this.renderTodosList();
+    }
+
     showView(viewName) {
         this.currentView = viewName;
         
@@ -2840,6 +3109,8 @@ class SkydivingLogbook {
             this.renderStats();
         } else if (viewName === 'flysight') {
             this.renderFlysightView();
+        } else if (viewName === 'todos') {
+            this.renderTodosList();
         }
     }
     
