@@ -25,7 +25,9 @@ header {
     background: #2196F3;
     color: white;
     padding: 1rem;
+    padding-top: max(1rem, env(safe-area-inset-top));
     text-align: center;
+    overflow: visible;
 }
 
 .header-top {
@@ -120,6 +122,9 @@ header h1 {
     justify-content: center;
     flex-wrap: wrap;
     gap: 0.5rem;
+    max-width: 100%;
+    overflow: visible;
+    -webkit-overflow-scrolling: touch;
 }
 
 .nav-btn {
@@ -131,6 +136,10 @@ header h1 {
     cursor: pointer;
     transition: background-color 0.3s ease;
     font-size: 0.9rem;
+    flex-shrink: 0;
+    min-height: 44px;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: rgba(255, 255, 255, 0.25);
 }
 
 .nav-btn:hover {
@@ -2347,8 +2356,9 @@ footer.legal-footer a {
     }
     
     .nav-btn {
-        padding: 0.4rem 0.65rem;
-        font-size: 0.75rem;
+        padding: 0.55rem 0.7rem;
+        font-size: 0.8rem;
+        min-height: 44px;
     }
     
     main {
@@ -2658,8 +2668,10 @@ footer.legal-footer a {
 }
 
 .todo-add-btn {
-    width: 2.25rem;
-    height: 2.25rem;
+    width: 2.75rem;
+    height: 2.75rem;
+    min-width: 44px;
+    min-height: 44px;
     border: none;
     background: #2196F3;
     color: white;
@@ -2673,6 +2685,8 @@ footer.legal-footer a {
     padding: 0;
     flex-shrink: 0;
     transition: background-color 0.2s;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
 }
 
 .todo-add-btn:hover,
@@ -2693,6 +2707,10 @@ footer.legal-footer a {
     flex-direction: column;
 }
 
+.todo-add-form input {
+    font-size: 16px;
+}
+
 .todo-item {
     display: flex;
     align-items: center;
@@ -2702,6 +2720,7 @@ footer.legal-footer a {
     -webkit-touch-callout: none;
     -webkit-user-select: none;
     user-select: none;
+    touch-action: pan-y;
 }
 
 .todo-item:last-child {
@@ -2722,8 +2741,10 @@ footer.legal-footer a {
 }
 
 .todo-check-btn {
-    width: 2.1rem;
-    height: 2.1rem;
+    width: 2.75rem;
+    height: 2.75rem;
+    min-width: 44px;
+    min-height: 44px;
     flex-shrink: 0;
     border: 2px solid #2196F3;
     background: #fff;
@@ -2735,6 +2756,8 @@ footer.legal-footer a {
     justify-content: center;
     padding: 0;
     transition: background-color 0.15s, color 0.15s, border-color 0.15s;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
 }
 
 .todo-check-btn svg {
@@ -2792,8 +2815,10 @@ footer.legal-footer a {
     font-size: 0.8rem;
     font-weight: 500;
     cursor: pointer;
-    padding: 0.2rem 0.15rem;
+    padding: 0.55rem 0.35rem;
+    min-height: 44px;
     white-space: nowrap;
+    touch-action: manipulation;
 }
 
 .todo-clear-done-btn:hover {
@@ -2811,6 +2836,10 @@ footer.legal-footer a {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
+}
+
+.todo-item-modal-content input[type="text"] {
+    font-size: 16px;
 }
 
 .todo-item-modal-content .todo-edit-actions .btn-primary,

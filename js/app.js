@@ -65,7 +65,11 @@ class SkydivingLogbook {
         }
         this.normalizeNavSettings();
 
-        this.todos = this.loadTodos();
+        try {
+            this.todos = this.loadTodos();
+        } catch (_) {
+            this.todos = [];
+        }
         this._todoLongPressTimer = null;
         this._todoLongPressId = null;
         this._todoSuppressClick = false;
@@ -493,27 +497,31 @@ class SkydivingLogbook {
         });
 
         // Navigation buttons
-        document.getElementById('jumpsViewBtn').addEventListener('click', () => {
+        document.getElementById('jumpsViewBtn')?.addEventListener('click', () => {
             this.showView('jumps');
         });
 
-        document.getElementById('equipmentViewBtn').addEventListener('click', () => {
+        document.getElementById('equipmentViewBtn')?.addEventListener('click', () => {
             this.showView('equipment');
         });
 
-        document.getElementById('statsViewBtn').addEventListener('click', () => {
+        document.getElementById('statsViewBtn')?.addEventListener('click', () => {
             this.showView('stats');
         });
 
-        document.getElementById('flysightViewBtn').addEventListener('click', () => {
+        document.getElementById('flysightViewBtn')?.addEventListener('click', () => {
             this.showView('flysight');
         });
 
-        document.getElementById('todosViewBtn').addEventListener('click', () => {
+        document.getElementById('todosViewBtn')?.addEventListener('click', () => {
             this.showView('todos');
         });
 
-        this._bindTodoEvents();
+        try {
+            this._bindTodoEvents();
+        } catch (err) {
+            console.error('[TODOs] Failed to bind events:', err);
+        }
         this._bindFlysightEvents();
 
         // Equipment management
@@ -2883,7 +2891,11 @@ class SkydivingLogbook {
     }
 
     saveTodos() {
-        localStorage.setItem('skydiving-todos', JSON.stringify(this.todos));
+        try {
+            localStorage.setItem('skydiving-todos', JSON.stringify(this.todos));
+        } catch (err) {
+            console.error('[TODOs] Failed to save:', err);
+        }
     }
 
     _newTodoId() {
@@ -2892,6 +2904,15 @@ class SkydivingLogbook {
 
     _todoCheckIconSvg() {
         return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>';
+    }
+
+    /** Element.closest that works on text nodes and SVG (older Android WebView). */
+    _todoEventEl(e) {
+        let el = e.target;
+        if (!el) return null;
+        if (el.nodeType !== 1) el = el.parentElement;
+        while (el && typeof el.closest !== 'function') el = el.parentElement;
+        return el;
     }
 
     _bindTodoEvents() {
@@ -2927,48 +2948,80 @@ class SkydivingLogbook {
                 this._todoSuppressClick = false;
                 return;
             }
-            const clearBtn = e.target.closest('#clearDoneTodosBtn');
+            const el = this._todoEventEl(e);
+            if (!el) return;
+            const clearBtn = el.closest('#clearDoneTodosBtn');
             if (clearBtn) {
                 this.clearDoneTodos();
                 return;
             }
-            const checkBtn = e.target.closest('.todo-check-btn');
+            const checkBtn = el.closest('.todo-check-btn');
             if (checkBtn) {
                 this.toggleTodoDone(checkBtn.dataset.todoId);
             }
         });
 
-        list.addEventListener('pointerdown', (e) => {
-            if (e.pointerType === 'mouse' && e.button !== 0) return;
-            if (e.target.closest('.todo-check-btn') || e.target.closest('#clearDoneTodosBtn')) return;
-            const item = e.target.closest('.todo-item');
-            if (!item) return;
-            const id = item.dataset.todoId;
+        const startLongPress = (x, y, id) => {
             this._cancelTodoLongPress();
             this._todoLongPressId = id;
-            this._todoPointerStartX = e.clientX;
-            this._todoPointerStartY = e.clientY;
+            this._todoPointerStartX = x;
+            this._todoPointerStartY = y;
             this._todoLongPressTimer = setTimeout(() => {
                 this._todoLongPressTimer = null;
                 this._todoSuppressClick = true;
-                if (typeof navigator.vibrate === 'function') navigator.vibrate(12);
+                if (typeof navigator.vibrate === 'function') {
+                    try { navigator.vibrate(12); } catch (_) { /* iOS */ }
+                }
                 this.openTodoItemModal(id);
             }, 500);
-        });
+        };
 
-        list.addEventListener('pointermove', (e) => {
+        const moveLongPress = (x, y) => {
             if (!this._todoLongPressTimer) return;
-            const dx = e.clientX - this._todoPointerStartX;
-            const dy = e.clientY - this._todoPointerStartY;
-            if (Math.hypot(dx, dy) > 10) this._cancelTodoLongPress();
-        });
+            if (Math.hypot(x - this._todoPointerStartX, y - this._todoPointerStartY) > 10) {
+                this._cancelTodoLongPress();
+            }
+        };
 
-        list.addEventListener('pointerup', () => this._cancelTodoLongPress());
-        list.addEventListener('pointercancel', () => this._cancelTodoLongPress());
+        const itemIdFromEvent = (e) => {
+            const el = this._todoEventEl(e);
+            if (!el) return null;
+            if (el.closest('.todo-check-btn') || el.closest('#clearDoneTodosBtn')) return null;
+            const item = el.closest('.todo-item');
+            return item ? item.dataset.todoId : null;
+        };
+
+        if (window.PointerEvent) {
+            list.addEventListener('pointerdown', (e) => {
+                if (e.pointerType === 'mouse' && e.button !== 0) return;
+                const id = itemIdFromEvent(e);
+                if (!id) return;
+                startLongPress(e.clientX, e.clientY, id);
+            });
+            list.addEventListener('pointermove', (e) => moveLongPress(e.clientX, e.clientY));
+            list.addEventListener('pointerup', () => this._cancelTodoLongPress());
+            list.addEventListener('pointercancel', () => this._cancelTodoLongPress());
+        } else {
+            list.addEventListener('touchstart', (e) => {
+                const t = e.changedTouches[0];
+                if (!t) return;
+                const id = itemIdFromEvent(e);
+                if (!id) return;
+                startLongPress(t.clientX, t.clientY, id);
+            }, { passive: true });
+            list.addEventListener('touchmove', (e) => {
+                const t = e.changedTouches[0];
+                if (t) moveLongPress(t.clientX, t.clientY);
+            }, { passive: true });
+            list.addEventListener('touchend', () => this._cancelTodoLongPress(), { passive: true });
+            list.addEventListener('touchcancel', () => this._cancelTodoLongPress(), { passive: true });
+        }
 
         list.addEventListener('contextmenu', (e) => {
-            const item = e.target.closest('.todo-item');
-            if (!item || e.target.closest('.todo-check-btn')) return;
+            const el = this._todoEventEl(e);
+            if (!el) return;
+            const item = el.closest('.todo-item');
+            if (!item || el.closest('.todo-check-btn')) return;
             e.preventDefault();
             this._cancelTodoLongPress();
             this.openTodoItemModal(item.dataset.todoId);
@@ -2988,7 +3041,11 @@ class SkydivingLogbook {
         const input = document.getElementById('todoAddInput');
         if (!form || !input) return;
         form.hidden = false;
-        input.focus();
+        form.removeAttribute('hidden');
+        requestAnimationFrame(() => {
+            input.focus();
+            try { input.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (_) { /* older WebView */ }
+        });
     }
 
     addTodoFromInput() {
@@ -3085,8 +3142,10 @@ class SkydivingLogbook {
         modal.style.display = 'block';
         setTimeout(() => {
             input.focus();
-            input.setSelectionRange(input.value.length, input.value.length);
-        }, 50);
+            try {
+                input.setSelectionRange(input.value.length, input.value.length);
+            } catch (_) { /* some mobile WebViews */ }
+        }, 300);
     }
 
     closeTodoItemModal() {
@@ -3139,7 +3198,7 @@ class SkydivingLogbook {
             btn.hidden = !show;
             btn.style.display = show ? '' : 'none';
         });
-        const nav = document.querySelector('.nav');
+        const nav = document.querySelector('.main-nav');
         if (nav) {
             nav.style.display = this.settings.visibleNavViews.length <= 1 ? 'none' : '';
         }
@@ -3200,6 +3259,9 @@ class SkydivingLogbook {
             viewName = this.settings.startView || validIds[0];
         }
         this.currentView = viewName;
+
+        const viewEl = document.getElementById(`${viewName}View`);
+        if (!viewEl) return;
         
         // Hide all views
         document.querySelectorAll('.view').forEach(view => {
@@ -3207,13 +3269,13 @@ class SkydivingLogbook {
         });
         
         // Show selected view
-        document.getElementById(`${viewName}View`).style.display = 'block';
+        viewEl.style.display = 'block';
         
         // Update navigation buttons
         document.querySelectorAll('.nav-btn').forEach(btn => {
             btn.classList.remove('active');
         });
-        document.getElementById(`${viewName}ViewBtn`).classList.add('active');
+        document.getElementById(`${viewName}ViewBtn`)?.classList.add('active');
         
         // Load view-specific content
         if (viewName === 'jumps') {

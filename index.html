@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Swooper Logbook</title>
     <link rel="stylesheet" href="css/style.css">
     <link rel="manifest" href="manifest.json">
@@ -197,7 +197,7 @@
                         <button type="button" id="addTodoBtn" class="todo-add-btn" title="Add item" aria-label="Add item">+</button>
                     </div>
                     <form id="todoAddForm" class="todo-add-form" hidden>
-                        <input type="text" id="todoAddInput" maxlength="200" placeholder="Add an item…" autocomplete="off" enterkeyhint="done">
+                        <input type="text" id="todoAddInput" maxlength="200" placeholder="Add an item…" autocomplete="off" enterkeyhint="done" autocapitalize="sentences" autocorrect="on">
                     </form>
                     <div id="todosList" class="todos-list"></div>
                 </section>
