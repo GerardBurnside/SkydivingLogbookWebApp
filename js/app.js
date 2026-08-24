@@ -5,6 +5,15 @@ const LINESET_STAT_THRESHOLD_PROPS = ['standardOrangeThreshold', 'standardRedThr
 const LINESET_MODAL_STAT_THRESHOLD_INPUT_IDS = ['linesetStatStandardOrange', 'linesetStatStandardRed'];
 const NEW_CANOPY_STAT_THRESHOLD_INPUT_IDS = ['newCanopyStatStandardOrange', 'newCanopyStatStandardRed'];
 
+/** Header tabs users can show or hide from Settings. */
+const MAIN_NAV_VIEWS = [
+    { id: 'jumps', label: 'Jumps' },
+    { id: 'equipment', label: 'Equipment' },
+    { id: 'stats', label: 'Statistics' },
+    { id: 'flysight', label: 'Flysight' },
+    { id: 'todos', label: 'TODOs' }
+];
+
 class SkydivingLogbook {
     constructor() {
         // Data arrays — populated asynchronously from IndexedDB in init()
@@ -54,6 +63,7 @@ class SkydivingLogbook {
         if (this.settings.resequenceJumpsFromStartingNumber === undefined) {
             this.settings.resequenceJumpsFromStartingNumber = true;
         }
+        this.normalizeNavSettings();
 
         this.todos = this.loadTodos();
         this._todoLongPressTimer = null;
@@ -164,7 +174,8 @@ class SkydivingLogbook {
         this.setupNotesAutocomplete();
         this.preFillFormWithLastJump();
         this.applyAutoDetectDropZoneUi(true);
-        this.showView('jumps');
+        this.applyNavVisibility();
+        this.showView(this.settings.startView);
         
         // Kick off background geocoding for any location missing coordinates
         this.geocodeAllLocations();
@@ -286,6 +297,12 @@ class SkydivingLogbook {
         if (reseqChk) {
             reseqChk.addEventListener('change', () => this._updateStartingJumpUiState());
         }
+
+        document.getElementById('navVisibilityOptions')?.addEventListener('change', (e) => {
+            if (e.target.classList.contains('nav-visibility-chk')) {
+                this._onNavVisibilityCheckboxChange(e.target);
+            }
+        });
 
         // document.getElementById('resetAppBtn').addEventListener('click', () => {
         //     this.resetAppToFirstLaunch();
@@ -2404,6 +2421,8 @@ class SkydivingLogbook {
         document.getElementById('hybridRedThreshold').value = this.settings.hybridRedThreshold ?? 80;
         document.getElementById('hybridOrangeThreshold').value = this.settings.hybridOrangeThreshold ?? 60;
 
+        this._populateNavSettingsControls();
+
         const cacheVerEl = document.getElementById('settingsCacheVersion');
         if (cacheVerEl) {
             cacheVerEl.textContent =
@@ -2659,6 +2678,22 @@ class SkydivingLogbook {
         this.settings.standardOrangeThreshold = standardOrangeThreshold;
         this.settings.hybridRedThreshold = hybridRedThreshold;
         this.settings.hybridOrangeThreshold = hybridOrangeThreshold;
+
+        const visibleNavViews = this._readNavVisibilityFromForm();
+        if (visibleNavViews.length === 0) {
+            this.showMessage('Keep at least one navigation tab turned on', 'error');
+            return;
+        }
+        this.settings.visibleNavViews = visibleNavViews;
+        const startViewEl = document.getElementById('settingsStartView');
+        const startView = startViewEl?.value;
+        this.settings.startView = visibleNavViews.includes(startView) ? startView : visibleNavViews[0];
+        this.normalizeNavSettings();
+        this.applyNavVisibility();
+        if (!this.settings.visibleNavViews.includes(this.currentView)) {
+            this.showView(this.settings.startView);
+        }
+
         localStorage.setItem('skydiving-settings', JSON.stringify(this.settings));
         this.markEquipmentModified();
 
@@ -3083,7 +3118,87 @@ class SkydivingLogbook {
         this.renderTodosList();
     }
 
+    normalizeNavSettings() {
+        const validIds = MAIN_NAV_VIEWS.map(v => v.id);
+        let visible = this.settings.visibleNavViews;
+        if (!Array.isArray(visible)) visible = [...validIds];
+        visible = validIds.filter(id => visible.includes(id));
+        if (visible.length === 0) visible = [...validIds];
+        this.settings.visibleNavViews = visible;
+        if (!visible.includes(this.settings.startView)) {
+            this.settings.startView = visible[0];
+        }
+    }
+
+    applyNavVisibility() {
+        this.normalizeNavSettings();
+        const visible = new Set(this.settings.visibleNavViews);
+        document.querySelectorAll('.nav-btn').forEach(btn => {
+            const viewId = btn.id.replace(/ViewBtn$/, '');
+            const show = visible.has(viewId);
+            btn.hidden = !show;
+            btn.style.display = show ? '' : 'none';
+        });
+        const nav = document.querySelector('.nav');
+        if (nav) {
+            nav.style.display = this.settings.visibleNavViews.length <= 1 ? 'none' : '';
+        }
+    }
+
+    _readNavVisibilityFromForm() {
+        const validIds = MAIN_NAV_VIEWS.map(v => v.id);
+        const checked = new Set(
+            [...document.querySelectorAll('.nav-visibility-chk:checked')].map(el => el.value)
+        );
+        return validIds.filter(id => checked.has(id));
+    }
+
+    _populateNavSettingsControls() {
+        this.normalizeNavSettings();
+        const visible = new Set(this.settings.visibleNavViews);
+        document.querySelectorAll('.nav-visibility-chk').forEach(chk => {
+            chk.checked = visible.has(chk.value);
+            chk.disabled = false;
+        });
+        this._syncStartViewSelect(this.settings.startView);
+        this._lockLastNavVisibilityCheckbox();
+    }
+
+    _onNavVisibilityCheckboxChange(changed) {
+        const checked = document.querySelectorAll('.nav-visibility-chk:checked');
+        if (checked.length === 0) {
+            changed.checked = true;
+            this.showMessage('Keep at least one navigation tab turned on', 'error');
+        }
+        this._syncStartViewSelect();
+        this._lockLastNavVisibilityCheckbox();
+    }
+
+    _lockLastNavVisibilityCheckbox() {
+        const boxes = [...document.querySelectorAll('.nav-visibility-chk')];
+        const checkedCount = boxes.filter(b => b.checked).length;
+        boxes.forEach(b => {
+            b.disabled = checkedCount === 1 && b.checked;
+        });
+    }
+
+    _syncStartViewSelect(preferred) {
+        const select = document.getElementById('settingsStartView');
+        if (!select) return;
+        const visible = this._readNavVisibilityFromForm();
+        const keep = preferred || select.value;
+        select.innerHTML = visible.map(id => {
+            const meta = MAIN_NAV_VIEWS.find(v => v.id === id);
+            return `<option value="${this.escapeHtml(id)}">${this.escapeHtml(meta ? meta.label : id)}</option>`;
+        }).join('');
+        select.value = visible.includes(keep) ? keep : (visible[0] || '');
+    }
+
     showView(viewName) {
+        const validIds = MAIN_NAV_VIEWS.map(v => v.id);
+        if (!validIds.includes(viewName)) {
+            viewName = this.settings.startView || validIds[0];
+        }
         this.currentView = viewName;
         
         // Hide all views
@@ -5486,6 +5601,11 @@ class SkydivingLogbook {
         if (importJumps.length && SkydivingLogbook.importJumpsHaveExplicitNumbers(importJumps)) {
             this.settings.resequenceJumpsFromStartingNumber = false;
         }
+        this.normalizeNavSettings();
+        this.applyNavVisibility();
+        if (!this.settings.visibleNavViews.includes(this.currentView)) {
+            this.showView(this.settings.startView);
+        }
 
         this.canopies.forEach(canopy => {
             if (!Array.isArray(canopy.linesets)) canopy.linesets = [];
@@ -5527,6 +5647,11 @@ class SkydivingLogbook {
         }
         if (importJumps.length && SkydivingLogbook.importJumpsHaveExplicitNumbers(importJumps)) {
             this.settings.resequenceJumpsFromStartingNumber = false;
+        }
+        this.normalizeNavSettings();
+        this.applyNavVisibility();
+        if (!this.settings.visibleNavViews.includes(this.currentView)) {
+            this.showView(this.settings.startView);
         }
 
         this.canopies.forEach(canopy => {

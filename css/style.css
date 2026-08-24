@@ -2124,6 +2124,27 @@ button.jump-number.jump-number-btn:focus-visible {
     margin: 5% auto;
 }
 
+.nav-visibility-options {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    margin: 0.35rem 0 1rem;
+}
+
+.nav-visibility-options label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    font-weight: normal;
+    margin: 0;
+    color: #333;
+}
+
+.nav-visibility-options input {
+    width: auto;
+}
+
 .settings-cache-reset-row {
     display: flex;
     align-items: center;

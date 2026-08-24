@@ -385,6 +385,21 @@
                 </p>
                 <button type="button" id="repairJumpLocalIdsBtn" class="btn-secondary" style="width:100%;">Repair duplicate / missing jump IDs</button> -->
 
+                <hr style="margin: 16px 0; border: none; border-top: 1px solid #ddd;">
+                <h3 style="margin-bottom: 8px;">Main navigation</h3>
+                <small style="color:#888; font-size:12px; display:block; margin-bottom:10px;">Choose which tabs appear at the top. The app opens on the start tab. At least one tab must stay on — for a TODOs-only home screen, leave only TODOs checked.</small>
+                <div id="navVisibilityOptions" class="nav-visibility-options">
+                    <label><input type="checkbox" class="nav-visibility-chk" value="jumps"> Jumps</label>
+                    <label><input type="checkbox" class="nav-visibility-chk" value="equipment"> Equipment</label>
+                    <label><input type="checkbox" class="nav-visibility-chk" value="stats"> Statistics</label>
+                    <label><input type="checkbox" class="nav-visibility-chk" value="flysight"> Flysight</label>
+                    <label><input type="checkbox" class="nav-visibility-chk" value="todos"> TODOs</label>
+                </div>
+                <div class="form-group">
+                    <label for="settingsStartView">Open the app on</label>
+                    <select id="settingsStartView"></select>
+                </div>
+
                 <button id="saveSettings" class="btn-primary" style="margin-top:16px;">Save Settings</button>
 
                 <!-- <hr style="margin: 16px 0; border: none; border-top: 1px solid #ddd;">
