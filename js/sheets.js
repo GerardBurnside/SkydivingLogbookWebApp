@@ -11,6 +11,7 @@ class SheetsAPI {
         this._syncInProgress = false;
         this._syncConflictPending = false;
         this._pendingConflict = null;
+        this._todoSheetsReady = false;
 
         this.ready = this.setupAPI();
     }
@@ -49,6 +50,7 @@ class SheetsAPI {
         if (spreadsheetId) {
             localStorage.setItem('oauth-spreadsheet-id', spreadsheetId);
         }
+        this._todoSheetsReady = false;
 
         if (this.spreadsheetId) {
             this.initialized = true;
@@ -214,6 +216,29 @@ class SheetsAPI {
                             { values: [{ userEnteredValue: { stringValue: '_syncMeta' } }, { userEnteredValue: { stringValue: '{}' } }] },
                         ]
                     }]
+                },
+                {
+                    properties: { title: 'Todos', index: 3 },
+                    data: [{
+                        startRow: 0, startColumn: 0,
+                        rowData: [{
+                            values: [
+                                'ID', 'Text', 'Done', 'Created At', 'Done At', 'Updated At'
+                            ].map(v => ({ userEnteredValue: { stringValue: v } }))
+                        }]
+                    }]
+                },
+                {
+                    properties: { title: 'deletedTodos', index: 4 },
+                    data: [{
+                        startRow: 0, startColumn: 0,
+                        rowData: [{
+                            values: [
+                                { userEnteredValue: { stringValue: 'ID' } },
+                                { userEnteredValue: { stringValue: 'Date deleted' } }
+                            ]
+                        }]
+                    }]
                 }
             ]
         };
@@ -378,6 +403,351 @@ class SheetsAPI {
         const range = `deletedJumps!A${startRow}:B${endRow}`;
         await this._apiCall('PUT', `/values/${encodeURIComponent(range)}?valueInputOption=RAW`, { values: rows });
         console.log('[Sheets] Appended', jumpIds.length, 'deletion(s) to deletedJumps');
+    }
+
+    // ── TODOs sheet ─────────────────────────────────────────────────────
+
+    static todoUpdatedAt(todo) {
+        const n = Number(todo?.updatedAt);
+        if (Number.isFinite(n) && n > 0) return n;
+        const doneAt = Number(todo?.doneAt);
+        if (todo?.done && Number.isFinite(doneAt) && doneAt > 0) return doneAt;
+        const created = Number(todo?.createdAt);
+        return Number.isFinite(created) && created > 0 ? created : 0;
+    }
+
+    static _todoId(todo) {
+        return todo && String(todo.id || '').trim();
+    }
+
+    /**
+     * Merge local and sheet TODOs. Deleted IDs win (item is removed even if
+     * it still exists on the other side). Same-id edits use last-write-wins.
+     */
+    static mergeTodos(localTodos, sheetTodos, deletedTodoIds) {
+        const deletedSet = deletedTodoIds instanceof Set
+            ? deletedTodoIds
+            : new Set(deletedTodoIds || []);
+        const localList = Array.isArray(localTodos) ? localTodos : [];
+        const sheetList = Array.isArray(sheetTodos) ? sheetTodos : [];
+        const byId = new Map();
+
+        const consider = (todo, localWinsTie) => {
+            const id = SheetsAPI._todoId(todo);
+            if (!id || deletedSet.has(id)) return;
+            const incoming = { ...todo, id };
+            const existing = byId.get(id);
+            if (!existing) {
+                byId.set(id, incoming);
+                return;
+            }
+            const existingTs = SheetsAPI.todoUpdatedAt(existing);
+            const incomingTs = SheetsAPI.todoUpdatedAt(incoming);
+            if (incomingTs > existingTs || (incomingTs === existingTs && localWinsTie)) {
+                byId.set(id, incoming);
+            }
+        };
+
+        for (const t of sheetList) consider(t, false);
+        for (const t of localList) consider(t, true);
+
+        const seen = new Set();
+        const merged = [];
+        const appendFrom = (list) => {
+            for (const t of list) {
+                const id = SheetsAPI._todoId(t);
+                if (!id || seen.has(id) || !byId.has(id)) continue;
+                merged.push(byId.get(id));
+                seen.add(id);
+            }
+        };
+        appendFrom(localList);
+        appendFrom(sheetList);
+        return merged;
+    }
+
+    static mergeDeletedTodos(localDeleted, sheetDeleted) {
+        const byId = new Map();
+        const add = (record) => {
+            const id = record && String(record.id || '').trim();
+            if (!id) return;
+            const deletedAt = record.deletedAt || new Date().toISOString();
+            const existing = byId.get(id);
+            if (!existing) {
+                byId.set(id, { id, deletedAt });
+                return;
+            }
+            if (String(deletedAt) < String(existing.deletedAt || '')) {
+                byId.set(id, { id, deletedAt });
+            }
+        };
+        for (const d of localDeleted || []) add(d);
+        for (const d of sheetDeleted || []) add(typeof d === 'string' ? { id: d } : d);
+        return Array.from(byId.values());
+    }
+
+    static todosEqual(a, b) {
+        const mapA = new Map((a || []).filter(t => SheetsAPI._todoId(t)).map(t => [SheetsAPI._todoId(t), t]));
+        const mapB = new Map((b || []).filter(t => SheetsAPI._todoId(t)).map(t => [SheetsAPI._todoId(t), t]));
+        if (mapA.size !== mapB.size) return false;
+        for (const [id, ta] of mapA) {
+            const tb = mapB.get(id);
+            if (!tb) return false;
+            if (String(ta.text || '') !== String(tb.text || '')) return false;
+            if (Boolean(ta.done) !== Boolean(tb.done)) return false;
+            if (SheetsAPI.todoUpdatedAt(ta) !== SheetsAPI.todoUpdatedAt(tb)) return false;
+        }
+        return true;
+    }
+
+    _parseTodoTimestamp(value) {
+        if (value === '' || value == null) return 0;
+        if (typeof value === 'number' && Number.isFinite(value)) {
+            return value > 1e12 ? value : (value > 1e9 ? value * 1000 : value);
+        }
+        const asNum = Number(value);
+        if (Number.isFinite(asNum) && String(value).trim() !== '' && !String(value).includes('-') && !String(value).includes('T')) {
+            return asNum > 1e12 ? asNum : (asNum > 1e9 ? asNum * 1000 : asNum);
+        }
+        const parsed = Date.parse(value);
+        return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    _parseTodoDone(value) {
+        if (value === true || value === 1) return true;
+        const s = String(value == null ? '' : value).trim().toLowerCase();
+        return s === 'true' || s === 'yes' || s === '1';
+    }
+
+    _formatTodoTimestamp(value) {
+        const n = Number(value);
+        if (!Number.isFinite(n) || n <= 0) return '';
+        try {
+            return new Date(n).toISOString();
+        } catch {
+            return '';
+        }
+    }
+
+    async _ensureTodosSheets() {
+        if (this._todoSheetsReady) return;
+        const meta = await this._apiCall('GET', '?fields=sheets(properties(title))');
+        const titles = new Set((meta.sheets || []).map(s => s.properties && s.properties.title).filter(Boolean));
+        const requests = [];
+        if (!titles.has('Todos')) {
+            requests.push({ addSheet: { properties: { title: 'Todos' } } });
+        }
+        if (!titles.has('deletedTodos')) {
+            requests.push({ addSheet: { properties: { title: 'deletedTodos' } } });
+        }
+        if (requests.length) {
+            await this._apiCall('POST', ':batchUpdate', { requests });
+        }
+        if (!titles.has('Todos')) {
+            await this._apiCall('PUT', '/values/Todos!A1:F1?valueInputOption=RAW', {
+                values: [['ID', 'Text', 'Done', 'Created At', 'Done At', 'Updated At']]
+            });
+            console.log('[Sheets] Added Todos sheet');
+        }
+        if (!titles.has('deletedTodos')) {
+            await this._apiCall('PUT', '/values/deletedTodos!A1:B1?valueInputOption=RAW', {
+                values: [['ID', 'Date deleted']]
+            });
+            console.log('[Sheets] Added deletedTodos sheet');
+        }
+        this._todoSheetsReady = true;
+    }
+
+    async getAllTodos() {
+        try {
+            const result = await this._apiCall('GET', '/values/Todos!A2:F?majorDimension=ROWS');
+            const rows = result.values || [];
+            const todos = [];
+            for (const row of rows) {
+                const id = (row[0] && String(row[0]).trim()) || '';
+                if (!id) continue;
+                const createdAt = this._parseTodoTimestamp(row[3]) || Date.now();
+                const done = this._parseTodoDone(row[2]);
+                const doneAt = done ? (this._parseTodoTimestamp(row[4]) || createdAt) : null;
+                const updatedAt = this._parseTodoTimestamp(row[5]) || doneAt || createdAt;
+                todos.push({
+                    id,
+                    text: row[1] != null ? String(row[1]) : '',
+                    done,
+                    createdAt,
+                    doneAt,
+                    updatedAt
+                });
+            }
+            return todos;
+        } catch (e) {
+            if (e.message && e.message.includes('404')) return [];
+            const meta = await this._apiCall('GET', '?fields=sheets(properties(title))');
+            const hasSheet = (meta.sheets || []).some(s => (s.properties && s.properties.title) === 'Todos');
+            if (!hasSheet) return [];
+            throw e;
+        }
+    }
+
+    async getDeletedTodos() {
+        try {
+            const result = await this._apiCall('GET', '/values/deletedTodos!A2:B?majorDimension=ROWS');
+            const rows = result.values || [];
+            const records = [];
+            const seen = new Set();
+            for (const row of rows) {
+                const id = (row[0] && String(row[0]).trim()) || '';
+                if (!id || seen.has(id)) continue;
+                seen.add(id);
+                records.push({
+                    id,
+                    deletedAt: (row[1] && String(row[1]).trim()) || new Date().toISOString()
+                });
+            }
+            return records;
+        } catch (e) {
+            if (e.message && e.message.includes('404')) return [];
+            const meta = await this._apiCall('GET', '?fields=sheets(properties(title))');
+            const hasSheet = (meta.sheets || []).some(s => (s.properties && s.properties.title) === 'deletedTodos');
+            if (!hasSheet) return [];
+            throw e;
+        }
+    }
+
+    async appendDeletedTodos(todoIds, records) {
+        if (!todoIds || todoIds.length === 0) return;
+        await this._ensureTodosSheets();
+        const byId = new Map((records || []).map(r => [r.id, r]));
+        const now = new Date().toISOString();
+        const rows = [...todoIds].map(id => [
+            id,
+            (byId.get(id) && byId.get(id).deletedAt) || now
+        ]);
+        const result = await this._apiCall('GET', '/values/deletedTodos?majorDimension=ROWS');
+        const existing = (result.values || []).length;
+        const startRow = existing + 1;
+        const endRow = existing + rows.length;
+        const range = `deletedTodos!A${startRow}:B${endRow}`;
+        await this._apiCall('PUT', `/values/${encodeURIComponent(range)}?valueInputOption=RAW`, { values: rows });
+        console.log('[Sheets] Appended', todoIds.length, 'deletion(s) to deletedTodos');
+    }
+
+    async uploadAllTodos(todos) {
+        if (!this.initialized) throw new Error('API not initialized');
+        await this._ensureTodosSheets();
+        const header = ['ID', 'Text', 'Done', 'Created At', 'Done At', 'Updated At'];
+        const dataRows = (todos || []).map(todo => {
+            const id = SheetsAPI._todoId(todo) || SheetsAPI.generateJumpId();
+            if (!todo.id) todo.id = id;
+            return [
+                id,
+                todo.text || '',
+                todo.done ? 'TRUE' : 'FALSE',
+                this._formatTodoTimestamp(todo.createdAt),
+                todo.done ? this._formatTodoTimestamp(todo.doneAt) : '',
+                this._formatTodoTimestamp(todo.updatedAt || SheetsAPI.todoUpdatedAt(todo))
+            ];
+        });
+        await this._apiCall('POST', '/values/Todos!A1:F:clear', {});
+        await this._apiCall('PUT', '/values/Todos!A1:F?valueInputOption=RAW', {
+            values: [header, ...dataRows]
+        });
+        console.log(`[Sheets] Uploaded ${dataRows.length} todo(s)`);
+    }
+
+    _readLocalTodos() {
+        const logbook = window.logbook;
+        if (logbook) {
+            return {
+                todos: Array.isArray(logbook.todos) ? [...logbook.todos] : [],
+                deleted: Array.isArray(logbook.deletedTodos) ? [...logbook.deletedTodos] : []
+            };
+        }
+        let todos = [];
+        let deleted = [];
+        try {
+            const parsed = JSON.parse(localStorage.getItem('skydiving-todos') || '[]');
+            if (Array.isArray(parsed)) todos = parsed;
+        } catch (_) { /* ignore */ }
+        try {
+            const parsed = JSON.parse(localStorage.getItem('skydiving-deleted-todos') || '[]');
+            if (Array.isArray(parsed)) deleted = parsed;
+        } catch (_) { /* ignore */ }
+        return { todos, deleted };
+    }
+
+    _applyTodosLocally(mergedTodos, mergedDeleted) {
+        try {
+            localStorage.setItem('skydiving-todos', JSON.stringify(mergedTodos || []));
+            localStorage.setItem('skydiving-deleted-todos', JSON.stringify(mergedDeleted || []));
+        } catch (err) {
+            console.error('[Sync] Failed to save todos locally:', err);
+        }
+        const logbook = window.logbook;
+        if (logbook && typeof logbook.applyTodosFromSync === 'function') {
+            logbook.applyTodosFromSync(mergedTodos, mergedDeleted);
+        }
+    }
+
+    /**
+     * Pull TODOs from the sheet, merge with local (honouring deletion tombstones),
+     * write the result back to the sheet when needed, and apply locally.
+     * @returns {{ changed: boolean }}
+     */
+    async syncTodosWithSheet() {
+        if (!this.initialized) return { changed: false };
+        await this._ensureTodosSheets();
+
+        const local = this._readLocalTodos();
+        const sheetTodos = await this.getAllTodos();
+        const sheetDeleted = await this.getDeletedTodos();
+        const mergedDeleted = SheetsAPI.mergeDeletedTodos(local.deleted, sheetDeleted);
+        const deletedIds = new Set(mergedDeleted.map(d => d.id));
+        const mergedTodos = SheetsAPI.mergeTodos(local.todos, sheetTodos, deletedIds);
+
+        this._applyTodosLocally(mergedTodos, mergedDeleted);
+
+        const sheetDeletedIds = new Set(sheetDeleted.map(d => d.id));
+        const newDeletionIds = mergedDeleted.map(d => d.id).filter(id => !sheetDeletedIds.has(id));
+        const survivingSheetTodos = sheetTodos.filter(t => t.id && !deletedIds.has(t.id));
+        const todosChanged = !SheetsAPI.todosEqual(mergedTodos, survivingSheetTodos);
+
+        if (todosChanged) {
+            await this.uploadAllTodos(mergedTodos);
+        }
+        if (newDeletionIds.length) {
+            await this.appendDeletedTodos(newDeletionIds, mergedDeleted);
+        }
+
+        const changed = todosChanged || newDeletionIds.length > 0;
+        if (changed) {
+            console.log('[Sync] Todos merged:', mergedTodos.length, 'item(s),', mergedDeleted.length, 'deleted');
+        }
+        return { changed };
+    }
+
+    async syncTodosWithSheetSafe() {
+        try {
+            return await this.syncTodosWithSheet();
+        } catch (error) {
+            console.error('[Sync] Todos sync failed:', error);
+            return { changed: false };
+        }
+    }
+
+    async _touchSyncMetaForTodos() {
+        const newTs = new Date().toISOString();
+        await this.syncEquipmentToSheet(newTs);
+        localStorage.setItem('skydiving-data-synced', newTs);
+        localStorage.setItem('skydiving-data-modified', newTs);
+    }
+
+    async _syncTodosAndTouchMetaIfChanged() {
+        const todoResult = await this.syncTodosWithSheetSafe();
+        if (todoResult.changed) {
+            await this._touchSyncMetaForTodos();
+        }
+        return todoResult;
     }
 
     // ── Write operations (Sheets API v4) ────────────────────────────────
@@ -812,6 +1182,7 @@ class SheetsAPI {
         } else {
             console.warn('[Sync] Conflict detected but logbook UI unavailable — auto-merging');
             await this._pullAllFromSheet(d, sheetTs);
+            await this._syncTodosAndTouchMetaIfChanged();
             this.clearSyncConflict();
         }
     }
@@ -879,6 +1250,7 @@ class SheetsAPI {
 
         const newTs = new Date().toISOString();
         await this.uploadAllJumps(mergedJumps);
+        await this.syncTodosWithSheetSafe();
         await this.syncEquipmentToSheet(newTs);
         localStorage.setItem('skydiving-data-synced', newTs);
         localStorage.setItem('skydiving-data-modified', newTs);
@@ -929,15 +1301,18 @@ class SheetsAPI {
                 if (this._hasSyncConflict(d, localSynced, localModified)) {
                     console.warn('[Startup] Conflict — sheet is newer and local has pending changes');
                     await this._presentSyncConflict(d, sheetTs);
+                    await this.syncTodosWithSheetSafe();
                 } else {
                     console.log('[Startup] Sheet is newer, pulling all data...');
                     await this._pullAllFromSheet(d, sheetTs);
+                    await this._syncTodosAndTouchMetaIfChanged();
                 }
             } else if (sheetIsNewer && lastWriteFromThisDevice) {
                 console.log('[Startup] Sheet newer but last write from this device — pushing only (no pull)');
                 const newTs   = new Date().toISOString();
                 const logbook = window.logbook;
                 await this.uploadAllJumps(logbook?.jumps || []);
+                await this.syncTodosWithSheetSafe();
                 await this.syncEquipmentToSheet(newTs);
                 localStorage.setItem('skydiving-data-synced', newTs);
                 localStorage.setItem('skydiving-data-modified', newTs);
@@ -947,10 +1322,16 @@ class SheetsAPI {
                 const newTs   = new Date().toISOString();
                 const logbook = window.logbook;
                 await this.uploadAllJumps(logbook?.jumps || []);
+                await this.syncTodosWithSheetSafe();
                 await this.syncEquipmentToSheet(newTs);
                 localStorage.setItem('skydiving-data-synced', newTs);
                 localStorage.setItem('skydiving-data-modified', newTs);
                 console.log('[Sync] Startup push complete, ts:', newTs);
+            } else {
+                const todoResult = await this._syncTodosAndTouchMetaIfChanged();
+                if (todoResult.changed) {
+                    console.log('[Sync] Startup todos-only push complete');
+                }
             }
 
             if (!this._syncConflictPending) {
@@ -1025,6 +1406,7 @@ class SheetsAPI {
             if (this._hasSyncConflict(d, localSynced, localModified)) {
                 console.warn('[Sync] Conflict — sheet is newer and local has pending changes');
                 await this._presentSyncConflict(d, sheetTs);
+                await this.syncTodosWithSheetSafe();
                 this.updateSyncStatus('Conflict');
                 return;
             }
@@ -1032,6 +1414,7 @@ class SheetsAPI {
             if (sheetTs && sheetTs > localSynced && !lastWriteFromThisDevice) {
                 console.warn('[Sync] Sheet is newer (other device) — pulling and merging');
                 await this._pullAllFromSheet(d, sheetTs);
+                await this._syncTodosAndTouchMetaIfChanged();
                 this.updateSyncStatus('Online');
                 return;
             }
@@ -1042,6 +1425,7 @@ class SheetsAPI {
             const newTs   = new Date().toISOString();
             const logbook = window.logbook;
             await this.uploadAllJumps(logbook?.jumps || []);
+            await this.syncTodosWithSheetSafe();
             await this.syncEquipmentToSheet(newTs);
 
             localStorage.setItem('skydiving-data-synced', newTs);
@@ -1198,6 +1582,7 @@ class SheetsAPI {
                 if (this._hasSyncConflict(d, localSynced, localModified)) {
                     console.warn('[Poll] Conflict — sheet is newer and local has pending changes');
                     await this._presentSyncConflict(d, sheetTs);
+                    await this.syncTodosWithSheetSafe();
                     this.updateSyncStatus('Conflict');
                     return;
                 }
@@ -1205,10 +1590,12 @@ class SheetsAPI {
                 if (sheetTs && sheetTs > localSynced && !lastWriteFromThisDevice) {
                     console.warn('[Poll] Sheet is newer (other device) — pulling and merging');
                     await this._pullAllFromSheet(d, sheetTs);
+                    await this._syncTodosAndTouchMetaIfChanged();
                 } else {
                     const newTs   = new Date().toISOString();
                     const logbook = window.logbook;
                     await this.uploadAllJumps(logbook?.jumps || []);
+                    await this.syncTodosWithSheetSafe();
                     await this.syncEquipmentToSheet(newTs);
                     localStorage.setItem('skydiving-data-synced', newTs);
                     localStorage.setItem('skydiving-data-modified', newTs);
@@ -1228,6 +1615,7 @@ class SheetsAPI {
                 console.log('[Poll] Sheet is newer (other device), pulling and merging...');
                 this.updateSyncStatus('Syncing...');
                 await this._pullAllFromSheet(d, sheetTs);
+                await this._syncTodosAndTouchMetaIfChanged();
                 this.updateSyncStatus('Synced');
                 setTimeout(() => this.updateSyncStatus('Online'), 2000);
             }

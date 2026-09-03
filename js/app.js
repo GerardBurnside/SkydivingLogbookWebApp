@@ -70,6 +70,12 @@ class SkydivingLogbook {
         } catch (_) {
             this.todos = [];
         }
+        try {
+            this.deletedTodos = this.loadDeletedTodos();
+        } catch (_) {
+            this.deletedTodos = [];
+        }
+        this._applyingTodoSync = false;
         this._todoLongPressTimer = null;
         this._todoLongPressId = null;
         this._todoSuppressClick = false;
@@ -2878,16 +2884,65 @@ class SkydivingLogbook {
             if (!Array.isArray(parsed)) return [];
             return parsed
                 .filter(t => t && typeof t.text === 'string')
-                .map(t => ({
-                    id: String(t.id || this._newTodoId()),
-                    text: t.text,
-                    done: Boolean(t.done),
-                    createdAt: Number(t.createdAt) || Date.now(),
-                    doneAt: t.done ? (Number(t.doneAt) || Date.now()) : null
-                }));
+                .map(t => this._normalizeTodo(t));
         } catch (_) {
             return [];
         }
+    }
+
+    _normalizeTodo(t) {
+        const createdAt = Number(t.createdAt) || Date.now();
+        const done = Boolean(t.done);
+        const doneAt = done ? (Number(t.doneAt) || createdAt) : null;
+        const updatedAt = Number(t.updatedAt) || (doneAt || createdAt);
+        return {
+            id: String(t.id || this._newTodoId()),
+            text: t.text,
+            done,
+            createdAt,
+            doneAt,
+            updatedAt
+        };
+    }
+
+    loadDeletedTodos() {
+        try {
+            const parsed = JSON.parse(localStorage.getItem('skydiving-deleted-todos') || '[]');
+            if (!Array.isArray(parsed)) return [];
+            const byId = new Map();
+            for (const d of parsed) {
+                const id = d && String(d.id || '').trim();
+                if (!id || byId.has(id)) continue;
+                byId.set(id, {
+                    id,
+                    deletedAt: d.deletedAt || new Date().toISOString()
+                });
+            }
+            return Array.from(byId.values());
+        } catch (_) {
+            return [];
+        }
+    }
+
+    saveDeletedTodos() {
+        try {
+            localStorage.setItem('skydiving-deleted-todos', JSON.stringify(this.deletedTodos || []));
+        } catch (err) {
+            console.error('[TODOs] Failed to save deletions:', err);
+        }
+    }
+
+    recordTodoDeletions(ids) {
+        const now = new Date().toISOString();
+        const have = new Set((this.deletedTodos || []).map(d => d.id));
+        if (!Array.isArray(this.deletedTodos)) this.deletedTodos = [];
+        for (const rawId of ids || []) {
+            const id = String(rawId || '').trim();
+            if (!id || have.has(id)) continue;
+            this.deletedTodos.push({ id, deletedAt: now });
+            have.add(id);
+        }
+        this.saveDeletedTodos();
     }
 
     saveTodos() {
@@ -2895,6 +2950,24 @@ class SkydivingLogbook {
             localStorage.setItem('skydiving-todos', JSON.stringify(this.todos));
         } catch (err) {
             console.error('[TODOs] Failed to save:', err);
+        }
+        if (this._applyingTodoSync) return;
+        localStorage.setItem('skydiving-data-modified', new Date().toISOString());
+        if (navigator.onLine && window.SheetsAPI?.initialized) {
+            window.SheetsAPI.pushAllWithGuard();
+        }
+    }
+
+    applyTodosFromSync(todos, deletedRecords) {
+        this._applyingTodoSync = true;
+        try {
+            this.todos = Array.isArray(todos) ? todos.map(t => this._normalizeTodo(t)) : [];
+            this.deletedTodos = Array.isArray(deletedRecords) ? deletedRecords : [];
+            this.saveTodos();
+            this.saveDeletedTodos();
+            if (this.currentView === 'todos') this.renderTodosList();
+        } finally {
+            this._applyingTodoSync = false;
         }
     }
 
@@ -3053,12 +3126,14 @@ class SkydivingLogbook {
         if (!input) return;
         const text = input.value.trim();
         if (!text) return;
+        const now = Date.now();
         this.todos.push({
             id: this._newTodoId(),
             text,
             done: false,
-            createdAt: Date.now(),
-            doneAt: null
+            createdAt: now,
+            doneAt: null,
+            updatedAt: now
         });
         this.saveTodos();
         input.value = '';
@@ -3110,15 +3185,18 @@ class SkydivingLogbook {
         const idx = this.todos.findIndex(t => t.id === id);
         if (idx < 0) return;
         const [item] = this.todos.splice(idx, 1);
+        const now = Date.now();
         if (item.done) {
             item.done = false;
             item.doneAt = null;
+            item.updatedAt = now;
             const firstDone = this.todos.findIndex(t => t.done);
             if (firstDone === -1) this.todos.push(item);
             else this.todos.splice(firstDone, 0, item);
         } else {
             item.done = true;
-            item.doneAt = Date.now();
+            item.doneAt = now;
+            item.updatedAt = now;
             this.todos.push(item);
         }
         this.saveTodos();
@@ -3127,6 +3205,7 @@ class SkydivingLogbook {
 
     clearDoneTodos() {
         if (!this.todos.some(t => t.done)) return;
+        this.recordTodoDeletions(this.todos.filter(t => t.done).map(t => t.id));
         this.todos = this.todos.filter(t => !t.done);
         this.saveTodos();
         this.renderTodosList();
@@ -3163,6 +3242,7 @@ class SkydivingLogbook {
         const item = this.todos.find(t => t.id === id);
         if (!item) return;
         item.text = text;
+        item.updatedAt = Date.now();
         this.saveTodos();
         this.closeTodoItemModal();
         this.renderTodosList();
@@ -3171,6 +3251,7 @@ class SkydivingLogbook {
     removeEditingTodo() {
         const id = this._editingTodoId;
         if (!id) return;
+        this.recordTodoDeletions([id]);
         this.todos = this.todos.filter(t => t.id !== id);
         this.saveTodos();
         this.closeTodoItemModal();
